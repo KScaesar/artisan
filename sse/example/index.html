@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Server Sent Event</title>
+</head>
+
+<body>
+<div class="event-data"></div>
+</body>
+
+<script src="https://code.jquery.com/jquery-1.11.1.js"></script>
+<script>
+  const user_id = Math.floor(Math.random() * 10) + 1;
+  const game_id = Math.floor(Math.random() * 3) + 1;
+  const room_id = Math.floor(Math.random() * 3) + 1;
+
+  const streamUrl = `http://127.0.0.1:18888/stream?user_id=${user_id}&game_id=${game_id}&room_id=${room_id}`;
+  const stream = new EventSource(streamUrl);
+
+  stream.onopen = function (event) {
+    $('.event-data').append("user_id: " + user_id + ", game_id: " + game_id + ", room_id: " + room_id + "</br>");
+  };
+
+  stream.onmessage = function (event) {
+    $('.event-data').append("onMessage: " + event.data + "</br>")
+  };
+
+  stream.addEventListener("v0/Notification", function (event) {
+    $('.event-data').append("addEventListener: "+event.type + ": " + event.data + "</br>")
+  });
+
+  stream.addEventListener("v1/ChangedRoomMap", function (event) {
+    const data = JSON.parse(event.data);
+    console.log("v1.ChangedRoomMap",data)
+    $('.event-data').append("addEventListener: "+event.type + ": " + JSON.stringify(data) + "</br>")
+  });
+
+  stream.addEventListener("Disconnect", function (event) {
+    stream.close();
+    $('.event-data').append("Server Disconnect"+"</br>")
+  });
+
+  stream.onerror = function (error) {
+    $('.event-data').append("Error occurred: " + error + "</br>");
+  };
+
+</script>
+
+</html>
