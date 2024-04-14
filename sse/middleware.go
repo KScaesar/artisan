@@ -26,7 +26,7 @@ func EncodeJson() EgressHandleFunc {
 		if message.AppMsg == nil {
 			message.AppMsg = struct{}{}
 		}
-		bBody, err := json.Marshal(&message.AppMsg)
+		bBody, err := json.Marshal(message.AppMsg)
 		if err != nil {
 			return err
 		}

@@ -2,6 +2,7 @@ package sse
 
 import (
 	"net/http"
+	"sync"
 
 	"github.com/KScaesar/Artifex"
 	"github.com/gin-gonic/gin"
@@ -70,6 +71,8 @@ func (f *Server) StopPublishers(filter func(SinglePublisher) bool) {
 }
 
 func (f *Server) CreatePublisherByGin(c *gin.Context) (SinglePublisher, error) {
+	var mu sync.Mutex
+
 	sseId, err := f.Authenticate(c.Writer, c.Request, f.Hub)
 	if err != nil {
 		return nil, err
@@ -79,6 +82,8 @@ func (f *Server) CreatePublisherByGin(c *gin.Context) (SinglePublisher, error) {
 		Identifier(sseId)
 
 	opt.AdapterSend(func(adp Artifex.IAdapter, egress *Egress) error {
+		mu.Lock()
+		defer mu.Unlock()
 		c.SSEvent(egress.Event, egress.StringBody)
 		c.Writer.Flush()
 		return nil
@@ -94,6 +99,8 @@ func (f *Server) CreatePublisherByGin(c *gin.Context) (SinglePublisher, error) {
 			return nil
 
 		default:
+			mu.Lock()
+			defer mu.Unlock()
 			c.SSEvent(f.StopMessage.Event, f.StopMessage.StringBody)
 			c.Writer.Flush()
 			return nil
