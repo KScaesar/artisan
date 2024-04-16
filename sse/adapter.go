@@ -112,13 +112,13 @@ func (f *Server) CreatePublisherByGin(c *gin.Context) (SinglePublisher, error) {
 		return nil, err
 	}
 
-	lifecycle.AddInitialize(
+	lifecycle.OnOpen(
 		func(adp Artifex.IAdapter) error {
 			err := f.Hub.Join(adp.Identifier(), adp.(SinglePublisher))
 			if err != nil {
 				return err
 			}
-			lifecycle.AddTerminate(func(adp Artifex.IAdapter) {
+			lifecycle.OnStop(func(adp Artifex.IAdapter) {
 				go f.Hub.RemoveOne(func(pub SinglePublisher) bool { return pub == adp })
 			})
 			return nil
