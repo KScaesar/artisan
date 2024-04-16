@@ -1,0 +1,28 @@
+version: "3.4"
+
+services:
+  rabbitmq:
+    image: rabbitmq:3.9.11-management
+    container_name: rabbitmq
+
+    #  https://www.rabbitmq.com/cli.html#node-names
+    hostname: "node0.rabbit.dev"
+
+    restart: always
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
+      - ./etc/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
+      - ./etc/advanced.config:/etc/rabbitmq/advanced.config
+      - ./etc/rabbitmq-env.conf:/etc/rabbitmq/rabbitmq-env.conf
+
+      # rabbitmq-plugins list
+      # https://www.rabbitmq.com/plugins.html#tier1-plugins
+      - ./etc/enabled_plugins:/etc/rabbitmq/enabled_plugins
+
+volumes:
+  rabbitmq_data:
+    name: rabbitmq_data
