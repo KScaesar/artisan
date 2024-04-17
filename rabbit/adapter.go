@@ -68,8 +68,8 @@ func NewSubscriberHub() *SubscriberHub {
 type PublisherFactory struct {
 	Pool         ConnectionPool
 	SetupAll     SetupAmqpAll
-	NewEgressMux func(ch **amqp.Channel) *EgressMux
 	ProducerName string
+	NewEgressMux func(ch **amqp.Channel) *EgressMux
 	PubHub       *PublisherHub
 	NewLifecycle func() (*Artifex.Lifecycle, error)
 }
@@ -158,9 +158,9 @@ func (f *PublisherFactory) CreatePublisher() (Publisher, error) {
 type SubscriberFactory struct {
 	Pool          ConnectionPool
 	SetupAll      SetupAmqpAll
-	NewIngressMux func() *IngressMux
 	NewConsumer   func(ch *amqp.Channel) (<-chan amqp.Delivery, error)
 	ConsumerName  string
+	NewIngressMux func() *IngressMux
 	SubHub        *SubscriberHub
 	NewLifecycle  func() (*Artifex.Lifecycle, error)
 }

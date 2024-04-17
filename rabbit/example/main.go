@@ -40,16 +40,26 @@ func NewSubscribers(pool rabbit.ConnectionPool, subHub *rabbit.SubscriberHub) {
 	newIngressMux := NewIngressMux()
 	subFactories := []*rabbit.SubscriberFactory{
 		{
-			Pool:          pool,
-			SetupAll:      Case1SetupAmqp(),
+			Pool: pool,
+			SetupAll: rabbit.MergeSetupAmqp(
+				SetupQos(1),
+				SetupExchange("test-ex1", "direct"),
+				SetupTemporaryQueue("test-q1", 10*time.Second),
+				SetupBind("test-q1", "test-ex1", []string{"key1-hello", "key1-world"}),
+			),
 			NewIngressMux: newIngressMux,
 			NewConsumer:   NewConsumer("test-q1", "test-c1", true),
 			ConsumerName:  "test-c1",
 			SubHub:        subHub,
 		},
 		{
-			Pool:          pool,
-			SetupAll:      Case2SetupAmqp(),
+			Pool: pool,
+			SetupAll: rabbit.MergeSetupAmqp(
+				SetupQos(1),
+				SetupExchange("test-ex2", "topic"),
+				SetupQueue("test-q2"),
+				SetupTemporaryBind("test-q2", "test-ex2", []string{"key2.*.Game"}, 10*time.Second),
+			),
 			NewIngressMux: newIngressMux,
 			NewConsumer:   NewConsumer("test-q2", "test-c2", true),
 			ConsumerName:  "test-c2",
@@ -105,8 +115,16 @@ func NewIngressMux() func() *rabbit.IngressMux {
 
 func NewPublisher(pool rabbit.ConnectionPool, pubHub *rabbit.PublisherHub) rabbit.Publisher {
 	pubFactory := &rabbit.PublisherFactory{
-		Pool:         pool,
-		SetupAll:     rabbit.MergeSetupAmqp(Case1SetupAmqp().Execute, Case2SetupAmqp().Execute),
+		Pool: pool,
+		SetupAll: rabbit.MergeSetupAmqp(
+			SetupExchange("test-ex1", "direct"),
+			SetupTemporaryQueue("test-q1", 10*time.Second),
+			SetupBind("test-q1", "test-ex1", []string{"key1-hello", "key1-world"}),
+
+			SetupExchange("test-ex2", "topic"),
+			SetupQueue("test-q2"),
+			SetupTemporaryBind("test-q2", "test-ex2", []string{"key2.*.Game"}, 10*time.Second),
+		),
 		NewEgressMux: NewEgressMux(),
 		ProducerName: "example_pub",
 		PubHub:       pubHub,
@@ -165,24 +183,6 @@ func NewEgressMux() func(ch **amqp.Channel) *rabbit.EgressMux {
 
 		return mux
 	}
-}
-
-func Case1SetupAmqp() rabbit.SetupAmqpAll {
-	return rabbit.MergeSetupAmqp(
-		SetupQos(1),
-		SetupExchange("test-ex1", "direct"),
-		SetupTemporaryQueue("test-q1", 10*time.Second),
-		SetupBind("test-q1", "test-ex1", []string{"key1-hello", "key1-world"}),
-	)
-}
-
-func Case2SetupAmqp() rabbit.SetupAmqpAll {
-	return rabbit.MergeSetupAmqp(
-		SetupQos(1),
-		SetupExchange("test-ex2", "topic"),
-		SetupQueue("test-q2"),
-		SetupTemporaryBind("test-q2", "test-ex2", []string{"key2.*.Game"}, 10*time.Second),
-	)
 }
 
 func fireMessage(pub rabbit.Publisher) {
