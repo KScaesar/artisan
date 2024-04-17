@@ -18,7 +18,7 @@ func NewIngress(amqpMsg amqp.Delivery, logger Artifex.Logger) *Ingress {
 	}
 
 	logger = logger.WithKeyValue("msg_id", msgId)
-	logger.Info("receive msg: msgType=%q: key=%q: body=%q", amqpMsg.Type, amqpMsg.RoutingKey, string(amqpMsg.Body))
+	logger.Info("recv %q", amqpMsg.RoutingKey)
 	return &Ingress{
 		MsgId:      msgId,
 		ByteBody:   amqpMsg.Body,
@@ -59,8 +59,12 @@ func IngressSkip() IngressHandleFunc {
 
 //
 
-func NewEgress() *Egress {
-	return &Egress{}
+func NewEgress(key RoutingKey, message any) *Egress {
+	return &Egress{
+		RoutingKey: key,
+		Metadata:   make(map[string]any),
+		AppMsg:     message,
+	}
 }
 
 type Egress struct {
@@ -75,7 +79,7 @@ type Egress struct {
 
 func (e *Egress) MsgId() string {
 	if e.msgId == "" {
-		return Artifex.GenerateRandomCode(12)
+		e.msgId = Artifex.GenerateRandomCode(12)
 	}
 	return e.msgId
 }
@@ -90,8 +94,7 @@ type EgressMux = Artifex.Mux[Egress]
 
 func NewEgressMux() *EgressMux {
 	getRoutingKey := func(message *Egress) string {
-		// TODO
-		return ""
+		return message.RoutingKey
 	}
 
 	mux := Artifex.NewMux(".", getRoutingKey)

@@ -7,35 +7,26 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-type SetupAmqp struct {
-	SetupQos      func(ch *amqp.Channel) error
-	SetupExchange func(ch *amqp.Channel) error
-	SetupQueue    func(ch *amqp.Channel) error
-	SetupBind     func(ch *amqp.Channel) error
-}
+type SetupAmqp func(channel *amqp.Channel) error
 
-func (fn *SetupAmqp) Execute(channel *amqp.Channel) error {
-	if fn.SetupExchange != nil {
-		if err := fn.SetupQos(channel); err != nil {
-			return err
-		}
-	}
-	if fn.SetupExchange != nil {
-		if err := fn.SetupExchange(channel); err != nil {
-			return err
-		}
-	}
-	if fn.SetupQueue != nil {
-		if err := fn.SetupQueue(channel); err != nil {
-			return err
-		}
-	}
-	if fn.SetupBind != nil {
-		if err := fn.SetupBind(channel); err != nil {
+type SetupAmqpAll []SetupAmqp
+
+func (all SetupAmqpAll) Execute(channel *amqp.Channel) error {
+	for _, setupAmqp := range all {
+		err := setupAmqp(channel)
+		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func MergeSetupAmqp(all ...SetupAmqp) SetupAmqpAll {
+	result := make(SetupAmqpAll, 0, len(all))
+	for _, setupAmqp := range all {
+		result = append(result, setupAmqp)
+	}
+	return result
 }
 
 //
@@ -58,7 +49,8 @@ func NewPublisherHub() *PublisherHub {
 	stop := func(publisher Publisher) {
 		publisher.Stop()
 	}
-	return Artifex.NewHub(stop)
+	hub := Artifex.NewHub(stop)
+	return hub
 }
 
 type SubscriberHub = Artifex.Hub[Subscriber]
@@ -67,16 +59,18 @@ func NewSubscriberHub() *SubscriberHub {
 	stop := func(subscriber Subscriber) {
 		subscriber.Stop()
 	}
-	return Artifex.NewHub(stop)
+	hub := Artifex.NewHub(stop)
+	return hub
 }
 
 //
 
 type PublisherFactory struct {
 	Pool         ConnectionPool
-	SetupAll     []SetupAmqp
+	SetupAll     SetupAmqpAll
 	NewEgressMux func(ch **amqp.Channel) *EgressMux
 	ProducerName string
+	PubHub       *PublisherHub
 	NewLifecycle func() (*Artifex.Lifecycle, error)
 }
 
@@ -91,11 +85,9 @@ func (f *PublisherFactory) CreatePublisher() (Publisher, error) {
 		return nil, err
 	}
 
-	for _, setupAmqp := range f.SetupAll {
-		err := setupAmqp.Execute(channel)
-		if err != nil {
-			return nil, err
-		}
+	err = f.SetupAll.Execute(channel)
+	if err != nil {
+		return nil, err
 	}
 
 	logger := Artifex.DefaultLogger().
@@ -117,12 +109,13 @@ func (f *PublisherFactory) CreatePublisher() (Publisher, error) {
 		}, waitNotify, 30)
 
 	egressMux := f.NewEgressMux(&channel)
-	opt.AdapterSend(func(adp Artifex.IAdapter, egress *Egress) error {
-		err := egressMux.HandleMessage(egress, nil)
+	opt.AdapterSend(func(adp Artifex.IAdapter, message *Egress) error {
+		err := egressMux.HandleMessage(message, nil)
 		if err != nil {
-			logger.Error("send message:", err)
+			logger.WithKeyValue("msg_id", message.MsgId()).Error("send %q: %v", message.RoutingKey, err)
 			return err
 		}
+		logger.WithKeyValue("msg_id", message.MsgId()).Info("send %q success", message.RoutingKey)
 		return nil
 	})
 
@@ -131,27 +124,32 @@ func (f *PublisherFactory) CreatePublisher() (Publisher, error) {
 		return channel.Close()
 	})
 
-	fixup := fixupAmqp(connection, &channel, logger, f.Pool, func(channel *amqp.Channel) error {
-		for _, setupAmqp := range f.SetupAll {
-			err := setupAmqp.Execute(channel)
-			if err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	fixup := fixupAmqp(connection, &channel, logger, f.Pool, f.SetupAll.Execute)
 	opt.AdapterFixup(0, func(adp Artifex.IAdapter) error {
-		if adp.IsStop() {
-			return nil
-		}
 		return fixup()
 	})
 
-	lifecycle, err := f.NewLifecycle()
-	if err != nil {
-		return nil, err
+	var lifecycle *Artifex.Lifecycle
+	if f.NewLifecycle != nil {
+		lifecycle, err = f.NewLifecycle()
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		lifecycle = new(Artifex.Lifecycle)
 	}
-
+	lifecycle.OnOpen(
+		func(adp Artifex.IAdapter) error {
+			err := f.PubHub.Join(adp.Identifier(), adp.(Publisher))
+			if err != nil {
+				return err
+			}
+			lifecycle.OnStop(func(adp Artifex.IAdapter) {
+				go f.PubHub.RemoveOne(func(pub Publisher) bool { return pub == adp })
+			})
+			return nil
+		},
+	)
 	opt.NewLifecycle(func() *Artifex.Lifecycle { return lifecycle })
 
 	return opt.BuildPublisher()
@@ -159,7 +157,7 @@ func (f *PublisherFactory) CreatePublisher() (Publisher, error) {
 
 type SubscriberFactory struct {
 	Pool          ConnectionPool
-	Setup         SetupAmqp
+	SetupAll      SetupAmqpAll
 	NewIngressMux func() *IngressMux
 	NewConsumer   func(ch *amqp.Channel) (<-chan amqp.Delivery, error)
 	ConsumerName  string
@@ -178,7 +176,8 @@ func (f *SubscriberFactory) CreateSubscriber() (Subscriber, error) {
 		return nil, err
 	}
 
-	if err := f.Setup.Execute(channel); err != nil {
+	err = f.SetupAll.Execute(channel)
+	if err != nil {
 		return nil, err
 	}
 
@@ -202,9 +201,6 @@ func (f *SubscriberFactory) CreateSubscriber() (Subscriber, error) {
 	opt.AdapterRecv(func(adp Artifex.IAdapter) (*Ingress, error) {
 		amqpMsg, ok := <-consumer
 		if !ok {
-			if adp.IsStop() {
-				return nil, nil
-			}
 			consumerIsClose = true
 			err := errors.New("amqp consumer close")
 			logger.Error("%v", err)
@@ -218,21 +214,13 @@ func (f *SubscriberFactory) CreateSubscriber() (Subscriber, error) {
 		return channel.Close()
 	})
 
-	fixup := fixupAmqp(connection, &channel, logger, f.Pool, f.Setup.Execute)
+	fixup := fixupAmqp(connection, &channel, logger, f.Pool, f.SetupAll.Execute)
 	opt.AdapterFixup(0, func(adp Artifex.IAdapter) error {
-		if adp.IsStop() {
-			return nil
-		}
-
 		if err := fixup(); err != nil {
 			return err
 		}
 		if consumerIsClose {
 			logger.Info("retry amqp consumer start")
-			if err := f.Setup.Execute(channel); err != nil {
-				logger.Error("retry setup amqp fail: %v", err)
-				return err
-			}
 			freshConsumer, err := f.NewConsumer(channel)
 			if err != nil {
 				logger.Error("retry amqp consumer fail: %v", err)
@@ -243,15 +231,18 @@ func (f *SubscriberFactory) CreateSubscriber() (Subscriber, error) {
 			consumer = freshConsumer
 			return nil
 		}
-
 		return nil
 	})
 
-	lifecycle, err := f.NewLifecycle()
-	if err != nil {
-		return nil, err
+	var lifecycle *Artifex.Lifecycle
+	if f.NewLifecycle != nil {
+		lifecycle, err = f.NewLifecycle()
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		lifecycle = new(Artifex.Lifecycle)
 	}
-
 	lifecycle.OnOpen(
 		func(adp Artifex.IAdapter) error {
 			err := f.SubHub.Join(adp.Identifier(), adp.(Subscriber))
@@ -276,7 +267,7 @@ func fixupAmqp(
 	channel **amqp.Channel,
 	logger Artifex.Logger,
 	pool ConnectionPool,
-	setupAmqp func(channel *amqp.Channel) error,
+	setupAmqp SetupAmqp,
 ) func() error {
 
 	connCloseNotify := (*connection).NotifyClose(make(chan *amqp.Error, 1))
@@ -323,13 +314,13 @@ func fixupAmqp(
 			chCloseNotify = (*channel).NotifyClose(make(chan *amqp.Error, 1))
 		}
 
-		logger.Info("retry rebuild amqp start")
+		logger.Info("retry setup amqp start")
 		err := setupAmqp(*channel)
 		if err != nil {
-			logger.Error("retry rebuild amqp fail: %v", err)
+			logger.Error("retry setup amqp fail: %v", err)
 			return err
 		}
-		logger.Info("retry rebuild amqp success")
+		logger.Info("retry setup amqp success")
 		retryCnt = 0
 		return nil
 	}
