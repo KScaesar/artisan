@@ -20,7 +20,6 @@ func NewEgress(event Event, message any) *Egress {
 
 type Egress struct {
 	msgId      string
-	ByteBody   []byte
 	StringBody string
 
 	Event    Event
@@ -30,7 +29,7 @@ type Egress struct {
 
 func (e *Egress) MsgId() string {
 	if e.msgId == "" {
-		return ""
+		e.msgId = Artifex.GenerateRandomCode(12)
 	}
 	return e.msgId
 }

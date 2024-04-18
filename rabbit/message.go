@@ -68,9 +68,8 @@ func NewEgress(key RoutingKey, message any) *Egress {
 }
 
 type Egress struct {
-	msgId      string
-	ByteBody   []byte
-	StringBody string
+	msgId    string
+	ByteBody []byte
 
 	RoutingKey RoutingKey
 	Metadata   maputil.Data
