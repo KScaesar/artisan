@@ -1,6 +1,8 @@
 package rabbit
 
 import (
+	"context"
+
 	"github.com/gookit/goutil/maputil"
 
 	"github.com/KScaesar/Artifex"
@@ -14,14 +16,14 @@ type RoutingKey = string
 func NewIngress(amqpMsg *amqp.Delivery, logger Artifex.Logger) *Ingress {
 	msgId := amqpMsg.MessageId
 	if msgId == "" {
-		msgId = Artifex.GenerateRandomCode(12)
+		msgId = Artifex.GenerateUlid()
 	}
 
 	logger = logger.WithKeyValue("msg_id", msgId)
 	logger.Info("recv %q", amqpMsg.RoutingKey)
 	return &Ingress{
 		MsgId:      msgId,
-		ByteBody:   amqpMsg.Body,
+		Body:       amqpMsg.Body,
 		RoutingKey: amqpMsg.RoutingKey,
 		AmqpMsg:    amqpMsg,
 		Logger:     logger,
@@ -29,12 +31,25 @@ func NewIngress(amqpMsg *amqp.Delivery, logger Artifex.Logger) *Ingress {
 }
 
 type Ingress struct {
-	MsgId    string
-	ByteBody []byte
+	MsgId string
+	Body  []byte
 
 	RoutingKey RoutingKey
 	AmqpMsg    *amqp.Delivery
 	Logger     Artifex.Logger
+
+	ctx context.Context
+}
+
+func (in *Ingress) Context() context.Context {
+	if in.ctx == nil {
+		in.ctx = context.Background()
+	}
+	return in.ctx
+}
+
+func (in *Ingress) SetContext(ctx context.Context) {
+	in.ctx = ctx
 }
 
 type IngressHandleFunc = Artifex.HandleFunc[Ingress]
@@ -51,34 +66,30 @@ func NewIngressMux() *IngressMux {
 	return mux
 }
 
-func IngressSkip() IngressHandleFunc {
-	return func(_ *Ingress, _ *Artifex.RouteParam) (err error) {
-		return nil
-	}
-}
-
 //
 
 func NewEgress(key RoutingKey, message any) *Egress {
 	return &Egress{
-		RoutingKey: key,
-		Metadata:   make(map[string]any),
-		AppMsg:     message,
+		Subject:  key,
+		Metadata: make(map[string]any),
+		AppMsg:   message,
 	}
 }
 
 type Egress struct {
-	msgId    string
-	ByteBody []byte
+	msgId string
+	Body  []byte
 
-	RoutingKey RoutingKey
-	Metadata   maputil.Data
-	AppMsg     any
+	Subject  string
+	Metadata maputil.Data
+	AppMsg   any
+
+	ctx context.Context
 }
 
 func (e *Egress) MsgId() string {
 	if e.msgId == "" {
-		e.msgId = Artifex.GenerateRandomCode(12)
+		e.msgId = Artifex.GenerateUlid()
 	}
 	return e.msgId
 }
@@ -87,21 +98,26 @@ func (e *Egress) SetMsgId(msgId string) {
 	e.msgId = msgId
 }
 
+func (e *Egress) Context() context.Context {
+	if e.ctx == nil {
+		e.ctx = context.Background()
+	}
+	return e.ctx
+}
+
+func (e *Egress) SetContext(ctx context.Context) {
+	e.ctx = ctx
+}
+
 type EgressHandleFunc = Artifex.HandleFunc[Egress]
 type EgressMiddleware = Artifex.Middleware[Egress]
 type EgressMux = Artifex.Mux[Egress]
 
 func NewEgressMux() *EgressMux {
 	getRoutingKey := func(message *Egress) string {
-		return message.RoutingKey
+		return message.Subject
 	}
 
 	mux := Artifex.NewMux(".", getRoutingKey)
 	return mux
-}
-
-func EgressSkip() EgressHandleFunc {
-	return func(_ *Egress, _ *Artifex.RouteParam) (err error) {
-		return nil
-	}
 }

@@ -51,12 +51,10 @@ func NewSseServer() *sse.Server {
 	root := server.Mux
 
 	v0 := root.Group("v0/")
-	v0.Middleware(sse.EncodeText().PreMiddleware())
 	v0.SetDefaultHandler(broadcast(server.Hub))
 	v0.Handler("Notification", Notification(server.Hub))
 
 	v1 := root.Group("v1/")
-	v1.PreMiddleware(sse.EncodeJson())
 	v1.Handler("PausedGame", PausedGame(server.Hub))
 	v1.Handler("ChangedRoomMap/{room_id}", ChangedRoomMap(server.Hub))
 
@@ -146,13 +144,12 @@ func NewEgressMux() func(ch **amqp.Channel) *rabbit.EgressMux {
 			return (*channel).PublishWithContext(
 				ctx,
 				"test-ex1",
-				message.RoutingKey,
+				message.Subject,
 				false,
 				false,
 				amqp.Publishing{
-					ContentType: "text/plain",
-					MessageId:   message.MsgId(),
-					Body:        message.ByteBody,
+					MessageId: message.MsgId(),
+					Body:      message.Body,
 				},
 			)
 		})
@@ -161,20 +158,19 @@ func NewEgressMux() func(ch **amqp.Channel) *rabbit.EgressMux {
 			return (*channel).PublishWithContext(
 				ctx,
 				"test-ex2",
-				message.RoutingKey,
+				message.Subject,
 				false,
 				false,
 				amqp.Publishing{
-					ContentType: "text/plain",
-					MessageId:   message.MsgId(),
-					Body:        message.ByteBody,
+					MessageId: message.MsgId(),
+					Body:      message.Body,
 				},
 			)
 		})
 
 		fmt.Println()
 		for _, v := range mux.Endpoints() {
-			fmt.Printf("[Rabbit Egress] RoutingKey=%-40q f=%q\n", v[0], v[1])
+			fmt.Printf("[Rabbit Egress] Subject=%-40q f=%q\n", v[0], v[1])
 		}
 
 		return mux

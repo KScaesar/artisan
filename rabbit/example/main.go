@@ -41,12 +41,12 @@ func NewSubscribers(pool rabbit.ConnectionPool, subHub *rabbit.SubscriberHub) {
 	subFactories := []*rabbit.SubscriberFactory{
 		{
 			Pool: pool,
-			SetupAmqp: rabbit.MergeSetupAmqp(
+			SetupAmqp: []rabbit.SetupAmqp{
 				SetupQos(1),
 				SetupExchange("test-ex1", "direct"),
 				SetupTemporaryQueue("test-q1", 10*time.Second),
 				SetupBind("test-q1", "test-ex1", []string{"key1-hello", "key1-world"}),
-			),
+			},
 			NewIngressMux: newIngressMux,
 			NewConsumer:   NewConsumer("test-q1", "test-c1", true),
 			ConsumerName:  "test-c1",
@@ -54,12 +54,12 @@ func NewSubscribers(pool rabbit.ConnectionPool, subHub *rabbit.SubscriberHub) {
 		},
 		{
 			Pool: pool,
-			SetupAmqp: rabbit.MergeSetupAmqp(
+			SetupAmqp: []rabbit.SetupAmqp{
 				SetupQos(1),
 				SetupExchange("test-ex2", "topic"),
 				SetupQueue("test-q2"),
 				SetupTemporaryBind("test-q2", "test-ex2", []string{"key2.*.Game"}, 10*time.Second),
-			),
+			},
 			NewIngressMux: newIngressMux,
 			NewConsumer:   NewConsumer("test-q2", "test-c2", true),
 			ConsumerName:  "test-c2",
@@ -77,7 +77,7 @@ func NewSubscribers(pool rabbit.ConnectionPool, subHub *rabbit.SubscriberHub) {
 	subHub.DoAsync(func(sub rabbit.Subscriber) {
 		err := sub.Listen()
 		if err != nil {
-			fmt.Printf("%v fail: %v", sub.Identifier(), err)
+			Artifex.DefaultLogger().Error("%v fail: %v", sub.Identifier(), err)
 		}
 	})
 }
@@ -86,26 +86,26 @@ func NewIngressMux() func() *rabbit.IngressMux {
 	mux := rabbit.NewIngressMux()
 
 	mux.Handler("key1-hello", func(message *rabbit.Ingress, _ *Artifex.RouteParam) error {
-		message.Logger.Info("print key1-hello: %v", string(message.ByteBody))
+		message.Logger.Info("print key1-hello: %v", string(message.Body))
 		return nil
 	})
 	mux.Handler("key1-world", func(message *rabbit.Ingress, _ *Artifex.RouteParam) error {
-		message.Logger.Info("print key1-world: %v", string(message.ByteBody))
+		message.Logger.Info("print key1-world: %v", string(message.Body))
 		return nil
 	})
 
 	mux.Handler("key2.Created.Game", func(message *rabbit.Ingress, _ *Artifex.RouteParam) error {
-		message.Logger.Info("print key2.Created.Game: %v", string(message.ByteBody))
+		message.Logger.Info("print key2.Created.Game: %v", string(message.Body))
 		return nil
 	})
 	mux.Handler("key2.Restarted.Game", func(message *rabbit.Ingress, _ *Artifex.RouteParam) error {
-		message.Logger.Info("print key2.Restarted.Game: %v", string(message.ByteBody))
+		message.Logger.Info("print key2.Restarted.Game: %v", string(message.Body))
 		return nil
 	})
 
 	fmt.Println()
 	for _, v := range mux.Endpoints() {
-		fmt.Printf("[Rabbit Ingress] RoutingKey=%-40q f=%q\n", v[0], v[1])
+		fmt.Printf("[Rabbit Ingress] Subject=%-40q f=%q\n", v[0], v[1])
 	}
 
 	return func() *rabbit.IngressMux {
@@ -116,7 +116,7 @@ func NewIngressMux() func() *rabbit.IngressMux {
 func NewPublisher(pool rabbit.ConnectionPool, pubHub *rabbit.PublisherHub) rabbit.Publisher {
 	pubFactory := &rabbit.PublisherFactory{
 		Pool: pool,
-		SetupAmqp: rabbit.MergeSetupAmqp(
+		SetupAmqp: []rabbit.SetupAmqp{
 			SetupExchange("test-ex1", "direct"),
 			SetupTemporaryQueue("test-q1", 10*time.Second),
 			SetupBind("test-q1", "test-ex1", []string{"key1-hello", "key1-world"}),
@@ -124,9 +124,9 @@ func NewPublisher(pool rabbit.ConnectionPool, pubHub *rabbit.PublisherHub) rabbi
 			SetupExchange("test-ex2", "topic"),
 			SetupQueue("test-q2"),
 			SetupTemporaryBind("test-q2", "test-ex2", []string{"key2.*.Game"}, 10*time.Second),
-		),
-		NewEgressMux: NewEgressMux(),
+		},
 		ProducerName: "example_pub",
+		NewEgressMux: NewEgressMux(),
 		PubHub:       pubHub,
 	}
 
@@ -150,13 +150,12 @@ func NewEgressMux() func(ch **amqp.Channel) *rabbit.EgressMux {
 			return (*channel).PublishWithContext(
 				ctx,
 				"test-ex1",
-				message.RoutingKey,
+				message.Subject,
 				false,
 				false,
 				amqp.Publishing{
-					ContentType: "text/plain",
-					MessageId:   message.MsgId(),
-					Body:        message.ByteBody,
+					MessageId: message.MsgId(),
+					Body:      message.Body,
 				},
 			)
 		})
@@ -165,20 +164,19 @@ func NewEgressMux() func(ch **amqp.Channel) *rabbit.EgressMux {
 			return (*channel).PublishWithContext(
 				ctx,
 				"test-ex2",
-				message.RoutingKey,
+				message.Subject,
 				false,
 				false,
 				amqp.Publishing{
-					ContentType: "text/plain",
-					MessageId:   message.MsgId(),
-					Body:        message.ByteBody,
+					MessageId: message.MsgId(),
+					Body:      message.Body,
 				},
 			)
 		})
 
 		fmt.Println()
 		for _, v := range mux.Endpoints() {
-			fmt.Printf("[Rabbit Egress] RoutingKey=%-40q f=%q\n", v[0], v[1])
+			fmt.Printf("[Rabbit Egress] Subject=%-40q f=%q\n", v[0], v[1])
 		}
 
 		return mux

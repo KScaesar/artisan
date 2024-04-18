@@ -28,7 +28,7 @@ func EncodeJson() EgressHandleFunc {
 		if err != nil {
 			return err
 		}
-		message.ByteBody = bBody
+		message.Body = bBody
 		return nil
 	}
 }

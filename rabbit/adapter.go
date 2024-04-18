@@ -21,14 +21,6 @@ func (all SetupAmqpAll) Execute(channel *amqp.Channel) error {
 	return nil
 }
 
-func MergeSetupAmqp(all ...SetupAmqp) SetupAmqpAll {
-	result := make(SetupAmqpAll, len(all))
-	for i, setupAmqp := range all {
-		result[i] = setupAmqp
-	}
-	return result
-}
-
 //
 
 type Publisher interface {
@@ -71,7 +63,7 @@ type PublisherFactory struct {
 	ProducerName string
 	NewEgressMux func(ch **amqp.Channel) *EgressMux
 	PubHub       *PublisherHub
-	NewLifecycle func() (*Artifex.Lifecycle, error)
+	Lifecycle    func(lifecycle *Artifex.Lifecycle)
 }
 
 func (f *PublisherFactory) CreatePublisher() (Publisher, error) {
@@ -112,10 +104,10 @@ func (f *PublisherFactory) CreatePublisher() (Publisher, error) {
 	opt.AdapterSend(func(adp Artifex.IAdapter, message *Egress) error {
 		err := egressMux.HandleMessage(message, nil)
 		if err != nil {
-			logger.WithKeyValue("msg_id", message.MsgId()).Error("send %q: %v", message.RoutingKey, err)
+			logger.WithKeyValue("msg_id", message.MsgId()).Error("send %q: %v", message.Subject, err)
 			return err
 		}
-		logger.WithKeyValue("msg_id", message.MsgId()).Info("send %q success", message.RoutingKey)
+		logger.WithKeyValue("msg_id", message.MsgId()).Info("send %q success", message.Subject)
 		return nil
 	})
 
@@ -129,40 +121,35 @@ func (f *PublisherFactory) CreatePublisher() (Publisher, error) {
 		return fixup()
 	})
 
-	var lifecycle *Artifex.Lifecycle
-	if f.NewLifecycle != nil {
-		lifecycle, err = f.NewLifecycle()
-		if err != nil {
-			return nil, err
+	opt.Lifecycle(func(life *Artifex.Lifecycle) {
+		life.OnOpen(
+			func(adp Artifex.IAdapter) error {
+				err := f.PubHub.Join(adp.Identifier(), adp.(Publisher))
+				if err != nil {
+					return err
+				}
+				life.OnStop(func(adp Artifex.IAdapter) {
+					go f.PubHub.RemoveOne(func(pub Publisher) bool { return pub == adp })
+				})
+				return nil
+			},
+		)
+		if f.Lifecycle != nil {
+			f.Lifecycle(life)
 		}
-	} else {
-		lifecycle = new(Artifex.Lifecycle)
-	}
-	lifecycle.OnOpen(
-		func(adp Artifex.IAdapter) error {
-			err := f.PubHub.Join(adp.Identifier(), adp.(Publisher))
-			if err != nil {
-				return err
-			}
-			lifecycle.OnStop(func(adp Artifex.IAdapter) {
-				go f.PubHub.RemoveOne(func(pub Publisher) bool { return pub == adp })
-			})
-			return nil
-		},
-	)
-	opt.NewLifecycle(func() *Artifex.Lifecycle { return lifecycle })
+	})
 
 	return opt.BuildPublisher()
 }
 
 type SubscriberFactory struct {
-	Pool          ConnectionPool
-	SetupAmqp     SetupAmqpAll
-	NewConsumer   func(ch *amqp.Channel) (<-chan amqp.Delivery, error)
-	ConsumerName  string
-	NewIngressMux func() *IngressMux
-	SubHub        *SubscriberHub
-	NewLifecycle  func() (*Artifex.Lifecycle, error)
+	Pool             ConnectionPool
+	SetupAmqp        SetupAmqpAll
+	NewConsumer      func(ch *amqp.Channel) (<-chan amqp.Delivery, error)
+	ConsumerName     string
+	NewIngressMux    func() *IngressMux
+	SubHub           *SubscriberHub
+	AdapterLifecycle func(lifecycle *Artifex.Lifecycle)
 }
 
 func (f *SubscriberFactory) CreateSubscriber() (Subscriber, error) {
@@ -234,28 +221,23 @@ func (f *SubscriberFactory) CreateSubscriber() (Subscriber, error) {
 		return nil
 	})
 
-	var lifecycle *Artifex.Lifecycle
-	if f.NewLifecycle != nil {
-		lifecycle, err = f.NewLifecycle()
-		if err != nil {
-			return nil, err
+	opt.Lifecycle(func(life *Artifex.Lifecycle) {
+		life.OnOpen(
+			func(adp Artifex.IAdapter) error {
+				err := f.SubHub.Join(adp.Identifier(), adp.(Subscriber))
+				if err != nil {
+					return err
+				}
+				life.OnStop(func(adp Artifex.IAdapter) {
+					go f.SubHub.RemoveOne(func(sub Subscriber) bool { return sub == adp })
+				})
+				return nil
+			},
+		)
+		if f.AdapterLifecycle != nil {
+			f.AdapterLifecycle(life)
 		}
-	} else {
-		lifecycle = new(Artifex.Lifecycle)
-	}
-	lifecycle.OnOpen(
-		func(adp Artifex.IAdapter) error {
-			err := f.SubHub.Join(adp.Identifier(), adp.(Subscriber))
-			if err != nil {
-				return err
-			}
-			lifecycle.OnStop(func(adp Artifex.IAdapter) {
-				go f.SubHub.RemoveOne(func(sub Subscriber) bool { return sub == adp })
-			})
-			return nil
-		},
-	)
-	opt.NewLifecycle(func() *Artifex.Lifecycle { return lifecycle })
+	})
 
 	return opt.BuildSubscriber()
 }

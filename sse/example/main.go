@@ -44,7 +44,7 @@ func NewSseServer() *sse.Server {
 	}
 
 	once := sync.Once{}
-	server.AdapterLifecycle = func(w http.ResponseWriter, r *http.Request, lifecycle *Artifex.Lifecycle) {
+	server.Lifecycle = func(w http.ResponseWriter, r *http.Request, lifecycle *Artifex.Lifecycle) {
 		user_id := r.URL.Query().Get("user_id")
 		game_id := r.URL.Query().Get("game_id")
 		room_id := r.URL.Query().Get("room_id")
@@ -72,12 +72,10 @@ func NewSseServer() *sse.Server {
 	root := server.Mux
 
 	v0 := root.Group("v0/")
-	v0.Middleware(sse.EncodeText().PreMiddleware())
 	v0.SetDefaultHandler(broadcast(server.Hub))
 	v0.Handler("Notification", Notification(server.Hub))
 
 	v1 := root.Group("v1/")
-	v1.PreMiddleware(sse.EncodeJson())
 	v1.Handler("PausedGame", PausedGame(server.Hub))
 	v1.Handler("ChangedRoomMap/{room_id}", ChangedRoomMap(server.Hub))
 
@@ -112,11 +110,11 @@ func NewHttpServer(sseServer *sse.Server) *http.Server {
 func broadcast(hub *sse.Hub) sse.EgressHandleFunc {
 	return func(message *sse.Egress, route *Artifex.RouteParam) error {
 
-		event := message.Event
+		event := message.Subject
 
 		// The browser onMessage handler assumes the event name is 'message'
 		// https://stackoverflow.com/a/42803814/9288569
-		message.Event = "message"
+		message.Subject = "message"
 
 		action := func(pub sse.SinglePublisher) {
 			fmt.Printf("send broadcast %v: user_id=%v\n", event, pub.Identifier())
@@ -147,11 +145,11 @@ func Notification(hub *sse.Hub) sse.EgressHandleFunc {
 func PausedGame(hub *sse.Hub) sse.EgressHandleFunc {
 	return func(message *sse.Egress, _ *Artifex.RouteParam) error {
 
-		event := message.Event
+		event := message.Subject
 
 		// The browser onMessage handler assumes the event name is 'message'
 		// https://stackoverflow.com/a/42803814/9288569
-		message.Event = "message"
+		message.Subject = "message"
 
 		action := func(pub sse.SinglePublisher) (stop bool) {
 			pub.Query(func(_ string, appData maputil.Data) {
@@ -166,7 +164,7 @@ func PausedGame(hub *sse.Hub) sse.EgressHandleFunc {
 			return false
 		}
 		hub.DoSync(action)
-		message.Event = event // because DoSync
+		message.Subject = event // because DoSync
 		return nil
 	}
 }
@@ -176,8 +174,8 @@ func ChangedRoomMap(hub *sse.Hub) sse.EgressHandleFunc {
 		// Note: In DoAsync will get empty data because route param has been reset
 		room_id := route.Str("room_id") // success
 
-		event := message.Event
-		message.Event = "v1/ChangedRoomMap"
+		event := message.Subject
+		message.Subject = "v1/ChangedRoomMap"
 
 		action := func(pub sse.SinglePublisher) {
 			pub.Query(func(_ string, appData maputil.Data) {
