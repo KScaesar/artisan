@@ -24,7 +24,7 @@ func main() {
 
 	Artifex.NewShutdown().
 		SetStopAction("sse", func() error {
-			sseServer.StopAll()
+			sseServer.Shutdown()
 			return nil
 		}).
 		SetStopAction("http", func() error {

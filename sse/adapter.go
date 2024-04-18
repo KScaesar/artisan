@@ -13,7 +13,7 @@ import (
 
 type MultiPublisher interface {
 	Send(messages ...*Egress) error
-	StopAll()
+	Shutdown()
 	StopPublishers(filter func(SinglePublisher) bool)
 }
 
@@ -143,7 +143,7 @@ func (f *Server) Send(messages ...*Egress) error {
 	return nil
 }
 
-func (f *Server) StopAll() {
+func (f *Server) Shutdown() {
 	f.Hub.StopAll()
 }
 
