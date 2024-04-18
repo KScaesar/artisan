@@ -206,7 +206,7 @@ func (f *SubscriberFactory) CreateSubscriber() (Subscriber, error) {
 			logger.Error("%v", err)
 			return nil, err
 		}
-		return NewIngress(amqpMsg, logger), nil
+		return NewIngress(&amqpMsg, logger), nil
 	})
 
 	opt.AdapterStop(func(adp Artifex.IAdapter) error {

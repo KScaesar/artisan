@@ -11,7 +11,7 @@ type RoutingKey = string
 
 //
 
-func NewIngress(amqpMsg amqp.Delivery, logger Artifex.Logger) *Ingress {
+func NewIngress(amqpMsg *amqp.Delivery, logger Artifex.Logger) *Ingress {
 	msgId := amqpMsg.MessageId
 	if msgId == "" {
 		msgId = Artifex.GenerateRandomCode(12)
@@ -33,7 +33,7 @@ type Ingress struct {
 	ByteBody []byte
 
 	RoutingKey RoutingKey
-	AmqpMsg    amqp.Delivery
+	AmqpMsg    *amqp.Delivery
 	Logger     Artifex.Logger
 }
 
