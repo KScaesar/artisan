@@ -41,7 +41,7 @@ func NewSubscribers(pool rabbit.ConnectionPool, subHub *rabbit.SubscriberHub) {
 	subFactories := []*rabbit.SubscriberFactory{
 		{
 			Pool: pool,
-			SetupAll: rabbit.MergeSetupAmqp(
+			SetupAmqp: rabbit.MergeSetupAmqp(
 				SetupQos(1),
 				SetupExchange("test-ex1", "direct"),
 				SetupTemporaryQueue("test-q1", 10*time.Second),
@@ -54,7 +54,7 @@ func NewSubscribers(pool rabbit.ConnectionPool, subHub *rabbit.SubscriberHub) {
 		},
 		{
 			Pool: pool,
-			SetupAll: rabbit.MergeSetupAmqp(
+			SetupAmqp: rabbit.MergeSetupAmqp(
 				SetupQos(1),
 				SetupExchange("test-ex2", "topic"),
 				SetupQueue("test-q2"),
@@ -116,7 +116,7 @@ func NewIngressMux() func() *rabbit.IngressMux {
 func NewPublisher(pool rabbit.ConnectionPool, pubHub *rabbit.PublisherHub) rabbit.Publisher {
 	pubFactory := &rabbit.PublisherFactory{
 		Pool: pool,
-		SetupAll: rabbit.MergeSetupAmqp(
+		SetupAmqp: rabbit.MergeSetupAmqp(
 			SetupExchange("test-ex1", "direct"),
 			SetupTemporaryQueue("test-q1", 10*time.Second),
 			SetupBind("test-q1", "test-ex1", []string{"key1-hello", "key1-world"}),

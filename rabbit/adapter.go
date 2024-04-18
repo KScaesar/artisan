@@ -22,9 +22,9 @@ func (all SetupAmqpAll) Execute(channel *amqp.Channel) error {
 }
 
 func MergeSetupAmqp(all ...SetupAmqp) SetupAmqpAll {
-	result := make(SetupAmqpAll, 0, len(all))
-	for _, setupAmqp := range all {
-		result = append(result, setupAmqp)
+	result := make(SetupAmqpAll, len(all))
+	for i, setupAmqp := range all {
+		result[i] = setupAmqp
 	}
 	return result
 }
@@ -67,7 +67,7 @@ func NewSubscriberHub() *SubscriberHub {
 
 type PublisherFactory struct {
 	Pool         ConnectionPool
-	SetupAll     SetupAmqpAll
+	SetupAmqp    SetupAmqpAll
 	ProducerName string
 	NewEgressMux func(ch **amqp.Channel) *EgressMux
 	PubHub       *PublisherHub
@@ -85,7 +85,7 @@ func (f *PublisherFactory) CreatePublisher() (Publisher, error) {
 		return nil, err
 	}
 
-	err = f.SetupAll.Execute(channel)
+	err = f.SetupAmqp.Execute(channel)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +124,7 @@ func (f *PublisherFactory) CreatePublisher() (Publisher, error) {
 		return channel.Close()
 	})
 
-	fixup := fixupAmqp(connection, &channel, logger, f.Pool, f.SetupAll.Execute)
+	fixup := fixupAmqp(connection, &channel, logger, f.Pool, f.SetupAmqp.Execute)
 	opt.AdapterFixup(0, func(adp Artifex.IAdapter) error {
 		return fixup()
 	})
@@ -157,7 +157,7 @@ func (f *PublisherFactory) CreatePublisher() (Publisher, error) {
 
 type SubscriberFactory struct {
 	Pool          ConnectionPool
-	SetupAll      SetupAmqpAll
+	SetupAmqp     SetupAmqpAll
 	NewConsumer   func(ch *amqp.Channel) (<-chan amqp.Delivery, error)
 	ConsumerName  string
 	NewIngressMux func() *IngressMux
@@ -176,7 +176,7 @@ func (f *SubscriberFactory) CreateSubscriber() (Subscriber, error) {
 		return nil, err
 	}
 
-	err = f.SetupAll.Execute(channel)
+	err = f.SetupAmqp.Execute(channel)
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +214,7 @@ func (f *SubscriberFactory) CreateSubscriber() (Subscriber, error) {
 		return channel.Close()
 	})
 
-	fixup := fixupAmqp(connection, &channel, logger, f.Pool, f.SetupAll.Execute)
+	fixup := fixupAmqp(connection, &channel, logger, f.Pool, f.SetupAmqp.Execute)
 	opt.AdapterFixup(0, func(adp Artifex.IAdapter) error {
 		if err := fixup(); err != nil {
 			return err
