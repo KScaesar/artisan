@@ -82,7 +82,11 @@ func NewSseServer() *sse.Server {
 	v1.Handler("ChangedRoomMap/{room_id}", ChangedRoomMap(server.Hub))
 
 	fmt.Println()
-	root.PrintEndpoints(func(subject, fn string) { fmt.Printf("[Artifex] event=%-40q f=%q\n", subject, fn) })
+	// [Artifex-SSE] event="v0/.*"                                  f="main.broadcast.func1"
+	// [Artifex-SSE] event="v0/Notification"                        f="main.Notification.func1"
+	// [Artifex-SSE] event="v1/ChangedRoomMap/{room_id}"            f="main.ChangedRoomMap.func1"
+	// [Artifex-SSE] event="v1/PausedGame"                          f="main.PausedGame.func1"
+	root.PrintEndpoints(func(subject, fn string) { fmt.Printf("[Artifex-SSE] event=%-40q f=%q\n", subject, fn) })
 
 	return server
 }
