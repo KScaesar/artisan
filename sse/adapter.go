@@ -34,40 +34,32 @@ func NewHub() *Hub {
 
 func DefaultServer() *Server {
 	return &Server{
-		Authenticate: func(w http.ResponseWriter, r *http.Request, _ *Hub) (sseId string, err error) {
+		Authenticate: func(w http.ResponseWriter, r *http.Request, hub *Hub) (sseId string, err error) {
 			return Artifex.GenerateRandomCode(6), nil
 		},
-		Mux:          NewEgressMux(),
-		Hub:          NewHub(),
-		StopMessage:  NewEgress("Disconnect", struct{}{}),
-		NewLifecycle: func(r *http.Request) (*Artifex.Lifecycle, error) { return new(Artifex.Lifecycle), nil },
+		Mux:              NewEgressMux(),
+		Hub:              NewHub(),
+		StopMessage:      NewEgress("Disconnect", struct{}{}),
+		AdapterLifecycle: func(w http.ResponseWriter, r *http.Request, lifecycle *Artifex.Lifecycle) {},
 	}
 }
 
 type Server struct {
-	Authenticate func(w http.ResponseWriter, r *http.Request, hub *Hub) (sseId string, err error)
-	Mux          *EgressMux
-	Hub          *Hub
-	StopMessage  *Egress
-	NewLifecycle func(r *http.Request) (*Artifex.Lifecycle, error)
+	Authenticate     func(w http.ResponseWriter, r *http.Request, hub *Hub) (sseId string, err error)
+	Mux              *EgressMux
+	Hub              *Hub
+	StopMessage      *Egress
+	AdapterLifecycle func(w http.ResponseWriter, r *http.Request, lifecycle *Artifex.Lifecycle)
 }
 
-func (f *Server) Send(messages ...*Egress) error {
-	for _, message := range messages {
-		err := f.Mux.HandleMessage(message, nil)
-		if err != nil {
-			return err
-		}
+func (f *Server) ServeByGin(c *gin.Context) {
+	pub, err := f.CreatePublisherByGin(c)
+	if err != nil {
+		return
 	}
-	return nil
-}
-
-func (f *Server) StopAll() {
-	f.Hub.StopAll()
-}
-
-func (f *Server) StopPublishers(filter func(SinglePublisher) bool) {
-	f.Hub.RemoveMulti(filter)
+	c.Writer.Flush()
+	<-c.Request.Context().Done()
+	pub.Stop()
 }
 
 func (f *Server) CreatePublisherByGin(c *gin.Context) (SinglePublisher, error) {
@@ -89,7 +81,7 @@ func (f *Server) CreatePublisherByGin(c *gin.Context) (SinglePublisher, error) {
 		return nil
 	})
 
-	opt.AdapterStop(func(adp Artifex.IAdapter, _ *Egress) error {
+	opt.AdapterStop(func(adp Artifex.IAdapter) error {
 		if f.StopMessage == nil {
 			return nil
 		}
@@ -107,11 +99,7 @@ func (f *Server) CreatePublisherByGin(c *gin.Context) (SinglePublisher, error) {
 		}
 	})
 
-	lifecycle, err := f.NewLifecycle(c.Request)
-	if err != nil {
-		return nil, err
-	}
-
+	lifecycle := new(Artifex.Lifecycle)
 	lifecycle.OnOpen(
 		func(adp Artifex.IAdapter) error {
 			err := f.Hub.Join(adp.Identifier(), adp.(SinglePublisher))
@@ -124,7 +112,26 @@ func (f *Server) CreatePublisherByGin(c *gin.Context) (SinglePublisher, error) {
 			return nil
 		},
 	)
+	f.AdapterLifecycle(c.Writer, c.Request, lifecycle)
 	opt.NewLifecycle(func() *Artifex.Lifecycle { return lifecycle })
 
 	return opt.BuildPublisher()
+}
+
+func (f *Server) Send(messages ...*Egress) error {
+	for _, message := range messages {
+		err := f.Mux.HandleMessage(message, nil)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (f *Server) StopAll() {
+	f.Hub.StopAll()
+}
+
+func (f *Server) StopPublishers(filter func(SinglePublisher) bool) {
+	f.Hub.RemoveMulti(filter)
 }

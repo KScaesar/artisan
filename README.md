@@ -15,9 +15,37 @@ package main
 
 func NewSseServer() *sse.Server {
 	server := sse.DefaultServer()
+
 	server.Authenticate = func(w http.ResponseWriter, r *http.Request, hub *sse.Hub) (sseId string, err error) {
 		user_id := r.URL.Query().Get("user_id")
 		return user_id, nil
+	}
+
+	once := sync.Once{}
+	server.AdapterLifecycle = func(w http.ResponseWriter, r *http.Request, lifecycle *Artifex.Lifecycle) error {
+		user_id := r.URL.Query().Get("user_id")
+		game_id := r.URL.Query().Get("game_id")
+		room_id := r.URL.Query().Get("room_id")
+
+		lifecycle.OnOpen(func(adp Artifex.IAdapter) error {
+			adp.Update(func(id *string, appData maputil.Data) {
+				appData.Set("game_id", game_id)
+				appData.Set("room_id", room_id)
+			})
+
+			fmt.Printf("%v %v %v enter: total=%v\n", user_id, game_id, room_id, server.Hub.Total())
+			if server.Hub.Total() == 4 {
+				once.Do(func() {
+					close(mqFire)
+				})
+			}
+			return nil
+		})
+
+		lifecycle.OnStop(func(adp Artifex.IAdapter) {
+			fmt.Printf("%v %v %v leave: total=%v\n", user_id, game_id, room_id, server.Hub.Total())
+		})
+		return nil
 	}
 
 	root := server.Mux
@@ -32,48 +60,32 @@ func NewSseServer() *sse.Server {
 	v1.Handler("PausedGame", PausedGame(server.Hub))
 	v1.Handler("ChangedRoomMap/{room_id}", ChangedRoomMap(server.Hub))
 
-	fmt.Println() 
-	// [Artifex] event="v0/.*"                                  f="main.NewSseServer.broadcast.func4" 
-	// [Artifex] event="v0/Notification"                        f="main.NewSseServer.Notification.func5" 
-	// [Artifex] event="v1/ChangedRoomMap/{room_id}"            f="main.NewSseServer.ChangedRoomMap.func8" 
-	// [Artifex] event="v1/PausedGame"                          f="main.NewSseServer.PausedGame.func7"
-	for _, v := range root.Endpoints() {
-		fmt.Printf("[Artifex] event=%-40q f=%q\n", v[0], v[1])
-	}
+	fmt.Println()
+	// [Artifex] event="v0/.*"                                  f="main.broadcast.func1"
+	// [Artifex] event="v0/Notification"                        f="main.Notification.func1"
+	// [Artifex] event="v1/ChangedRoomMap/{room_id}"            f="main.ChangedRoomMap.func1"
+	// [Artifex] event="v1/PausedGame"                          f="main.PausedGame.func1"
+	root.PrintEndpoints(func(subject, fn string) { fmt.Printf("[Artifex] event=%-40q f=%q\n", subject, fn) })
 
 	return server
 }
 
-func sseServe(server *sse.Server, canFireMessage func(hub *sse.Hub) bool) func(*gin.Context) {
-	once := sync.Once{}
-	return func(c *gin.Context) {
-		pub, err := server.CreatePublisherByGin(c)
+func NewHttpServer(sseServer *sse.Server) *http.Server {
+	gin.SetMode(gin.ReleaseMode)
+	router := gin.Default()
+
+	router.StaticFile("/", "./index.html")
+	router.GET("/stream", sse.HeadersByGin(true), sseServer.ServeByGin)
+
+	httpServer := &http.Server{Handler: router, Addr: ":18888"}
+	go func() {
+		err := httpServer.ListenAndServe()
 		if err != nil {
-			fmt.Println("sseServe fail:", err)
-			return
+			fmt.Println("http server fail:", err)
 		}
+	}()
 
-		game_id := c.Query("game_id")
-		room_id := c.Query("room_id")
-
-		pub.Update(func(id *string, appData maputil.Data) {
-			appData.Set("game_id", game_id)
-			appData.Set("room_id", room_id)
-		})
-
-		fmt.Println("Join:", c.Query("user_id"), game_id, room_id, " cnt:", server.Hub.Total())
-		if canFireMessage(server.Hub) {
-			once.Do(func() {
-				close(mqFire)
-			})
-		}
-
-		c.Writer.Flush()
-
-		<-c.Request.Context().Done()
-		pub.Stop()
-		fmt.Println(c.Query("user_id"), game_id, room_id, "stop")
-	}
+	return httpServer
 }
 ```
 

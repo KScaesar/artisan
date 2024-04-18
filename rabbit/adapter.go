@@ -119,7 +119,7 @@ func (f *PublisherFactory) CreatePublisher() (Publisher, error) {
 		return nil
 	})
 
-	opt.AdapterStop(func(adp Artifex.IAdapter, _ *Egress) error {
+	opt.AdapterStop(func(adp Artifex.IAdapter) error {
 		logger.Info("active stop")
 		return channel.Close()
 	})
@@ -209,7 +209,7 @@ func (f *SubscriberFactory) CreateSubscriber() (Subscriber, error) {
 		return NewIngress(amqpMsg, logger), nil
 	})
 
-	opt.AdapterStop(func(adp Artifex.IAdapter, _ *struct{}) error {
+	opt.AdapterStop(func(adp Artifex.IAdapter) error {
 		logger.Info("active stop")
 		return channel.Close()
 	})
