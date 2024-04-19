@@ -122,18 +122,16 @@ func (f *PublisherFactory) CreatePublisher() (Publisher, error) {
 	})
 
 	opt.Lifecycle(func(life *Artifex.Lifecycle) {
-		life.OnOpen(
-			func(adp Artifex.IAdapter) error {
-				err := f.PubHub.Join(adp.Identifier(), adp.(Publisher))
-				if err != nil {
-					return err
-				}
-				life.OnStop(func(adp Artifex.IAdapter) {
-					go f.PubHub.RemoveOne(func(pub Publisher) bool { return pub == adp })
-				})
-				return nil
-			},
-		)
+		life.OnOpen(func(adp Artifex.IAdapter) error {
+			err := f.PubHub.Join(adp.Identifier(), adp.(Publisher))
+			if err != nil {
+				return err
+			}
+			life.OnStop(func(adp Artifex.IAdapter) {
+				go f.PubHub.RemoveOne(func(pub Publisher) bool { return pub == adp })
+			})
+			return nil
+		})
 		if f.Lifecycle != nil {
 			f.Lifecycle(life)
 		}
@@ -222,18 +220,16 @@ func (f *SubscriberFactory) CreateSubscriber() (Subscriber, error) {
 	})
 
 	opt.Lifecycle(func(life *Artifex.Lifecycle) {
-		life.OnOpen(
-			func(adp Artifex.IAdapter) error {
-				err := f.SubHub.Join(adp.Identifier(), adp.(Subscriber))
-				if err != nil {
-					return err
-				}
-				life.OnStop(func(adp Artifex.IAdapter) {
-					go f.SubHub.RemoveOne(func(sub Subscriber) bool { return sub == adp })
-				})
-				return nil
-			},
-		)
+		life.OnOpen(func(adp Artifex.IAdapter) error {
+			err := f.SubHub.Join(adp.Identifier(), adp.(Subscriber))
+			if err != nil {
+				return err
+			}
+			life.OnStop(func(adp Artifex.IAdapter) {
+				go f.SubHub.RemoveOne(func(sub Subscriber) bool { return sub == adp })
+			})
+			return nil
+		})
 		if f.Lifecycle != nil {
 			f.Lifecycle(life)
 		}
