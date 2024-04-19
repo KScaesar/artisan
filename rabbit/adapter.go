@@ -143,13 +143,13 @@ func (f *PublisherFactory) CreatePublisher() (Publisher, error) {
 }
 
 type SubscriberFactory struct {
-	Pool             ConnectionPool
-	SetupAmqp        SetupAmqpAll
-	NewConsumer      func(ch *amqp.Channel) (<-chan amqp.Delivery, error)
-	ConsumerName     string
-	NewIngressMux    func() *IngressMux
-	SubHub           *SubscriberHub
-	AdapterLifecycle func(lifecycle *Artifex.Lifecycle)
+	Pool          ConnectionPool
+	SetupAmqp     SetupAmqpAll
+	NewConsumer   func(ch *amqp.Channel) (<-chan amqp.Delivery, error)
+	ConsumerName  string
+	NewIngressMux func() *IngressMux
+	SubHub        *SubscriberHub
+	Lifecycle     func(lifecycle *Artifex.Lifecycle)
 }
 
 func (f *SubscriberFactory) CreateSubscriber() (Subscriber, error) {
@@ -234,8 +234,8 @@ func (f *SubscriberFactory) CreateSubscriber() (Subscriber, error) {
 				return nil
 			},
 		)
-		if f.AdapterLifecycle != nil {
-			f.AdapterLifecycle(life)
+		if f.Lifecycle != nil {
+			f.Lifecycle(life)
 		}
 	})
 
