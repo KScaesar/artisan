@@ -258,10 +258,12 @@ func fixupAmqp(
 		case Err := <-connCloseNotify:
 			if Err != nil {
 				logger.Error("amqp connection close: %v", Err)
+				connCloseNotify = nil
 			}
 		case Err := <-chCloseNotify:
 			if Err != nil {
 				logger.Error("amqp channel close: %v", Err)
+				chCloseNotify = nil
 			}
 		default:
 		}
