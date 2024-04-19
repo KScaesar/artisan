@@ -107,7 +107,7 @@ func (f *PublisherFactory) CreatePublisher() (Publisher, error) {
 			logger.WithKeyValue("msg_id", message.MsgId()).Error("send %q: %v", message.Subject, err)
 			return err
 		}
-		logger.WithKeyValue("msg_id", message.MsgId()).Info("send %q success", message.Subject)
+		logger.WithKeyValue("msg_id", message.MsgId()).Info("send %q", message.Subject)
 		return nil
 	})
 
