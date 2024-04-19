@@ -15,7 +15,7 @@ func main() {
 	Artifex.SetDefaultLogger(Artifex.NewLogger(false, Artifex.LogLevelDebug))
 
 	url := "amqp://guest:guest@127.0.0.1:5672"
-	pool := rabbit.NewSingleConnection(url)
+	pool := rabbit.NewConnectionPool(url, 2)
 
 	subHub := rabbit.NewSubscriberHub()
 	NewSubscribers(pool, subHub)

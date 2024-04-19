@@ -12,51 +12,71 @@ type ConnectionPool interface {
 	ReConnection(failed **amqp.Connection) error
 }
 
-func NewSingleConnection(url string) ConnectionPool {
-	return &singleConnection{
+func NewConnectionPool(url string, maxSize int) ConnectionPool {
+	const defaultSize = 1
+	if maxSize <= 0 {
+		maxSize = defaultSize
+	}
+	return &connectionPool{
 		newConnection: func() (*amqp.Connection, error) {
 			return amqp.Dial(url)
 		},
-		mutex:       make([]sync.Mutex, 1),
-		connections: make([]*amqp.Connection, 1),
+		mutex:       make([]sync.Mutex, maxSize),
+		connections: make([]*amqp.Connection, maxSize),
+		maxSize:     maxSize,
+		cursors:     make(map[**amqp.Connection]int, maxSize),
 	}
 }
 
-type singleConnection struct {
+type connectionPool struct {
 	newConnection func() (*amqp.Connection, error)
 	mutex         []sync.Mutex
 	connections   []*amqp.Connection
+
+	maxSize      int
+	cursors      map[**amqp.Connection]int
+	cursorsMutex sync.RWMutex
+	idx          int
+	idxMutex     sync.Mutex
 }
 
-func (pool *singleConnection) GetConnection() (**amqp.Connection, error) {
-	if pool.connections[0] != nil && !pool.connections[0].IsClosed() {
-		return &pool.connections[0], nil
+func (pool *connectionPool) GetConnection() (**amqp.Connection, error) {
+	cursor := pool.cursor()
+	if pool.connections[cursor] != nil && !pool.connections[cursor].IsClosed() {
+		return &pool.connections[cursor], nil
 	}
 
-	pool.mutex[0].Lock()
-	defer pool.mutex[0].Unlock()
+	pool.mutex[cursor].Lock()
+	defer pool.mutex[cursor].Unlock()
 
-	if pool.connections[0] != nil && !pool.connections[0].IsClosed() {
-		return &pool.connections[0], nil
+	if pool.connections[cursor] != nil && !pool.connections[cursor].IsClosed() {
+		return &pool.connections[cursor], nil
 	}
 
 	connection, err := pool.newConnection()
 	if err != nil {
 		return nil, err
 	}
-	pool.connections[0] = connection
-	return &pool.connections[0], nil
+
+	pool.connections[cursor] = connection
+	pool.cursorsMutex.Lock()
+	pool.cursors[&pool.connections[cursor]] = cursor
+	pool.cursorsMutex.Unlock()
+	return &pool.connections[cursor], nil
 }
 
-func (pool *singleConnection) ReConnection(failed **amqp.Connection) error {
-	if &pool.connections[0] != failed {
-		return errors.New("ReConnection :connection not match")
+func (pool *connectionPool) ReConnection(failed **amqp.Connection) error {
+	pool.cursorsMutex.RLock()
+	cursor, ok := pool.cursors[failed]
+	pool.cursorsMutex.RUnlock()
+	if !ok {
+		return errors.New("ReConnection: connection not match")
 	}
 
-	pool.mutex[0].Lock()
-	defer pool.mutex[0].Unlock()
+	pool.mutex[cursor].Lock()
+	defer pool.mutex[cursor].Unlock()
 
-	if !(*failed).IsClosed() {
+	if !pool.connections[cursor].IsClosed() {
 		return nil
 	}
 
@@ -64,6 +84,16 @@ func (pool *singleConnection) ReConnection(failed **amqp.Connection) error {
 	if err != nil {
 		return err
 	}
-	pool.connections[0] = connection
+
+	pool.connections[cursor] = connection
 	return nil
+}
+
+func (pool *connectionPool) cursor() int {
+	pool.idxMutex.Lock()
+	defer pool.idxMutex.Unlock()
+	idx := pool.idx
+	pool.idx++
+	pool.idx %= pool.maxSize
+	return idx
 }

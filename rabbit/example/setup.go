@@ -11,7 +11,8 @@ func SetupQos(prefetchCount int) func(channel *amqp.Channel) error {
 		return channel.Qos(
 			prefetchCount,
 			0,
-			false)
+			false,
+		)
 	}
 }
 
