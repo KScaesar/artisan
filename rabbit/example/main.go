@@ -36,7 +36,7 @@ func main() {
 		Listen(nil)
 }
 
-func NewSubscribers(pool rabbit.ConnectionPool, subHub *rabbit.SubscriberHub) {
+func NewSubscribers(pool rabbit.ConnectionPool, subHub *rabbit.SubHub) {
 	newIngressMux := NewIngressMux()
 	subFactories := []*rabbit.SubscriberFactory{
 		{
@@ -113,7 +113,7 @@ func NewIngressMux() func() *rabbit.IngressMux {
 	}
 }
 
-func NewPublisher(pool rabbit.ConnectionPool, pubHub *rabbit.PublisherHub) rabbit.Publisher {
+func NewPublisher(pool rabbit.ConnectionPool, pubHub *rabbit.PubHub) rabbit.Publisher {
 	pubFactory := &rabbit.PublisherFactory{
 		Pool: pool,
 		SetupAmqp: []rabbit.SetupAmqp{

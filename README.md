@@ -16,25 +16,22 @@ package main
 func NewSseServer() *sse.Server {
 	server := sse.DefaultServer()
 
-	server.Authenticate = func(w http.ResponseWriter, r *http.Request, hub *sse.Hub) (sseId string, err error) {
-		user_id := r.URL.Query().Get("user_id")
-		return user_id, nil
+	server.Authenticate = func(w http.ResponseWriter, r *http.Request) (sseId string, err error) {
+		userId := r.URL.Query().Get("user_id")
+		return userId, nil
 	}
 
 	once := sync.Once{}
-	server.AdapterLifecycle = func(w http.ResponseWriter, r *http.Request, lifecycle *Artifex.Lifecycle) error {
-		user_id := r.URL.Query().Get("user_id")
-		game_id := r.URL.Query().Get("game_id")
-		room_id := r.URL.Query().Get("room_id")
+	server.Lifecycle = func(w http.ResponseWriter, r *http.Request, lifecycle *Artifex.Lifecycle) {
+		userId := r.URL.Query().Get("user_id")
+		gameId := r.URL.Query().Get("game_id")
+		roomId := r.URL.Query().Get("room_id")
+		game := NewGame(gameId, roomId)
 
 		lifecycle.OnOpen(func(adp Artifex.IAdapter) error {
-			adp.Update(func(id *string, appData maputil.Data) {
-				appData.Set("game_id", game_id)
-				appData.Set("room_id", room_id)
-			})
-
-			fmt.Printf("%v %v %v enter: total=%v\n", user_id, game_id, room_id, server.Hub.Total())
-			if server.Hub.Total() == 4 {
+			CreateGame(game, adp.(sse.Publisher))
+			fmt.Printf("%v %v %v enter: total=%v\n", userId, game.GameId, game.RoomId, server.Hub.Local.Total())
+			if server.Hub.Local.Total() == 4 {
 				once.Do(func() {
 					close(mqFire)
 				})
@@ -43,9 +40,8 @@ func NewSseServer() *sse.Server {
 		})
 
 		lifecycle.OnStop(func(adp Artifex.IAdapter) {
-			fmt.Printf("%v %v %v leave: total=%v\n", user_id, game_id, room_id, server.Hub.Total())
+			fmt.Printf("%v %v %v leave: total=%v\n", userId, game.GameId, game.RoomId, server.Hub.Local.Total())
 		})
-		return nil
 	}
 
 	root := server.Mux

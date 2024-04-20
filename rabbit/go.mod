@@ -3,7 +3,7 @@ module github.com/KScaesar/Artifex-Adapter/rabbit
 go 1.18
 
 require (
-	github.com/KScaesar/Artifex v0.31.7
+	github.com/KScaesar/Artifex v0.33.0
 	github.com/gookit/goutil v0.6.15
 	github.com/rabbitmq/amqp091-go v1.9.0
 )

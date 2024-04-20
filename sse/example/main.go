@@ -9,7 +9,6 @@ import (
 
 	"github.com/KScaesar/Artifex"
 	"github.com/gin-gonic/gin"
-	"github.com/gookit/goutil/maputil"
 
 	"github.com/KScaesar/Artifex-Adapter/sse"
 )
@@ -38,25 +37,22 @@ var mqFire = make(chan string)
 func NewSseServer() *sse.Server {
 	server := sse.DefaultServer()
 
-	server.Authenticate = func(w http.ResponseWriter, r *http.Request, hub *sse.Hub) (sseId string, err error) {
-		user_id := r.URL.Query().Get("user_id")
-		return user_id, nil
+	server.Authenticate = func(w http.ResponseWriter, r *http.Request) (sseId string, err error) {
+		userId := r.URL.Query().Get("user_id")
+		return userId, nil
 	}
 
 	once := sync.Once{}
 	server.Lifecycle = func(w http.ResponseWriter, r *http.Request, lifecycle *Artifex.Lifecycle) {
-		user_id := r.URL.Query().Get("user_id")
-		game_id := r.URL.Query().Get("game_id")
-		room_id := r.URL.Query().Get("room_id")
+		userId := r.URL.Query().Get("user_id")
+		gameId := r.URL.Query().Get("game_id")
+		roomId := r.URL.Query().Get("room_id")
+		game := NewGame(gameId, roomId)
 
 		lifecycle.OnOpen(func(adp Artifex.IAdapter) error {
-			adp.Update(func(id *string, appData maputil.Data) {
-				appData.Set("game_id", game_id)
-				appData.Set("room_id", room_id)
-			})
-
-			fmt.Printf("%v %v %v enter: total=%v\n", user_id, game_id, room_id, server.Hub.Total())
-			if server.Hub.Total() == 4 {
+			CreateGame(game, adp.(sse.Publisher))
+			fmt.Printf("%v %v %v enter: total=%v\n", userId, game.GameId, game.RoomId, server.Hub.Local.Total())
+			if server.Hub.Local.Total() == 4 {
 				once.Do(func() {
 					close(mqFire)
 				})
@@ -65,7 +61,7 @@ func NewSseServer() *sse.Server {
 		})
 
 		lifecycle.OnStop(func(adp Artifex.IAdapter) {
-			fmt.Printf("%v %v %v leave: total=%v\n", user_id, game_id, room_id, server.Hub.Total())
+			fmt.Printf("%v %v %v leave: total=%v\n", userId, game.GameId, game.RoomId, server.Hub.Local.Total())
 		})
 	}
 
@@ -109,33 +105,35 @@ func NewHttpServer(sseServer *sse.Server) *http.Server {
 
 func broadcast(hub *sse.Hub) sse.EgressHandleFunc {
 	return func(message *sse.Egress, route *Artifex.RouteParam) error {
-
-		event := message.Subject
+		// broadcast by onMessage:
 
 		// The browser onMessage handler assumes the event name is 'message'
 		// https://stackoverflow.com/a/42803814/9288569
+		event := message.Subject
 		message.Subject = "message"
 
-		action := func(pub sse.SinglePublisher) {
+		hub.Local.DoAsync(func(pub sse.Publisher) {
 			fmt.Printf("send broadcast %v: user_id=%v\n", event, pub.Identifier())
 			pub.Send(message)
-		}
-		hub.DoAsync(action)
+		})
 		return nil
 	}
 }
 
 func Notification(hub *sse.Hub) sse.EgressHandleFunc {
 	return func(message *sse.Egress, route *Artifex.RouteParam) error {
+		// Notification by addEventListener:
+		// version from metadata
+		// user_id from metadata
 
 		user_ids := message.Metadata.StringsByStr("user_id")
-		pubs, found := hub.FindMultiByKey(user_ids)
+		pubs, found := hub.Local.FindMultiByKey(user_ids)
 		if !found {
 			return fmt.Errorf("not found: user_id=%v\n", user_ids)
 		}
 
 		for _, pub := range pubs {
-			fmt.Printf("send Notification: user_id=%v\n", pub.Identifier())
+			fmt.Printf("send %v: user_id=%v\n", message.Subject, pub.Identifier())
 			go pub.Send(message)
 		}
 		return nil
@@ -144,57 +142,69 @@ func Notification(hub *sse.Hub) sse.EgressHandleFunc {
 
 func PausedGame(hub *sse.Hub) sse.EgressHandleFunc {
 	return func(message *sse.Egress, _ *Artifex.RouteParam) error {
-
-		event := message.Subject
+		// PausedGame by onMessage:
+		// version from subject
+		// game_id from metadata
 
 		// The browser onMessage handler assumes the event name is 'message'
 		// https://stackoverflow.com/a/42803814/9288569
+		event := message.Subject
 		message.Subject = "message"
+		gameId := message.Metadata.Str("game_id")
 
-		action := func(pub sse.SinglePublisher) (stop bool) {
-			pub.Query(func(_ string, appData maputil.Data) {
-				game_id := message.Metadata.Str("game_id")
-				if appData.Str("game_id") != game_id {
-					return
-				}
-				fmt.Printf("send %v: user_id=%v game_id=%v\n", event, pub.Identifier(), game_id)
-
-				pub.Send(message)
-			})
-			return false
+		filter := func(game *Game) bool {
+			return game.GameId == gameId
 		}
-		hub.DoSync(action)
-		message.Subject = event // because DoSync
+		pubs, found := GetPublishersByGame(filter, hub.Local)
+		if !found {
+			return fmt.Errorf("not found: game_id=%v\n", gameId)
+		}
+
+		for _, pub := range pubs {
+			fmt.Printf("send %v: user_id=%v game_id=%v\n", event, pub.Identifier(), gameId)
+			pub.Send(message)
+		}
+
+		message.Subject = event
 		return nil
 	}
 }
 
 func ChangedRoomMap(hub *sse.Hub) sse.EgressHandleFunc {
 	return func(message *sse.Egress, route *Artifex.RouteParam) error {
-		// Note: In DoAsync will get empty data because route param has been reset
-		room_id := route.Str("room_id") // success
+		// ChangedRoomMap by addEventListener:
+		// version from metadata
+		// map_id from route metadata
+		// room_id from route param
 
+		// Note: In DoAsync function will get empty data because 'RouteParam' has been reset
+		roomId := route.Str("room_id") // success
+
+		// In order to remove 'RouteParam', original Subject=v1/ChangedRoomMap/{room_id}
 		event := message.Subject
 		message.Subject = "v1/ChangedRoomMap"
+		mapId := message.Metadata.Str("map_id")
 
-		action := func(pub sse.SinglePublisher) {
-			pub.Query(func(_ string, appData maputil.Data) {
-				// Note: In DoAsync will get empty data because route param has been reset
-				// room_id := route.Str("room_id") // fail
+		hub.Local.DoAsync(func(pub sse.Publisher) {
+			filter := func(game *Game) bool {
+				return game.RoomId == roomId
+			}
+			game, found := GetGame(filter, pub)
+			if !found {
+				return
+			}
 
-				if appData.Str("room_id") != room_id {
-					return
-				}
-				fmt.Printf("send %v: user_id=%v room_id=%v\n", event, pub.Identifier(), room_id)
-				pub.Send(message)
-			})
-		}
-		hub.DoAsync(action)
+			UpdateGame(func(game *Game) { game.ChangeMap(mapId) }, pub)
+
+			fmt.Printf("send %v: user_id=%v room_id=%v map_id=%v\n", event, pub.Identifier(), game.RoomId, game.MapId)
+			pub.Send(message)
+		})
+
 		return nil
 	}
 }
 
-func fireMessage(pubs sse.MultiPublisher) {
+func fireMessage(sseServer sse.MultiPublisher) {
 	<-mqFire
 
 	messages := []func() *sse.Egress{
@@ -243,33 +253,37 @@ func fireMessage(pubs sse.MultiPublisher) {
 
 		// ChangedRoomMap by addEventListener:
 		// version from metadata
+		// map_id from route metadata
 		// room_id from route param
 		func() *sse.Egress {
-			egress := sse.NewEgress("ChangedRoomMap/1", map[string]any{"y_room_id": "1"})
+			egress := sse.NewEgress("ChangedRoomMap/1", map[string]any{"y_room_id": "1", "z_map_id": "a"})
 			egress.Metadata.Set("version", "v1/")
+			egress.Metadata.Set("map_id", "a")
 			return egress
 		},
 		func() *sse.Egress {
-			egress := sse.NewEgress("ChangedRoomMap/2", map[string]any{"y_room_id": "2"})
+			egress := sse.NewEgress("ChangedRoomMap/2", map[string]any{"y_room_id": "2", "z_map_id": "b"})
 			egress.Metadata.Set("version", "v1/")
+			egress.Metadata.Set("map_id", "b")
 			return egress
 		},
 		func() *sse.Egress {
-			egress := sse.NewEgress("ChangedRoomMap/3", map[string]any{"y_room_id": "3"})
+			egress := sse.NewEgress("ChangedRoomMap/3", map[string]any{"y_room_id": "3", "z_map_id": "c"})
 			egress.Metadata.Set("version", "v1/")
+			egress.Metadata.Set("map_id", "c")
 			return egress
 		},
 	}
 
 	for _, message := range messages {
 		time.Sleep(1 * time.Second)
-		pubs.Send(message())
+		sseServer.Send(message())
 	}
 
 	fmt.Println("fireMessage finish !!!")
 	time.Sleep(time.Second)
 
-	pubs.StopPublishers(func(pub sse.SinglePublisher) bool {
+	sseServer.StopPublisher(func(pub sse.Publisher) bool {
 		return true
 	})
 }

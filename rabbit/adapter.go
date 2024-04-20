@@ -35,9 +35,9 @@ type Subscriber interface {
 
 //
 
-type PublisherHub = Artifex.Hub[Publisher]
+type PubHub = Artifex.Hub[Publisher]
 
-func NewPublisherHub() *PublisherHub {
+func NewPublisherHub() *PubHub {
 	stop := func(publisher Publisher) {
 		publisher.Stop()
 	}
@@ -45,9 +45,9 @@ func NewPublisherHub() *PublisherHub {
 	return hub
 }
 
-type SubscriberHub = Artifex.Hub[Subscriber]
+type SubHub = Artifex.Hub[Subscriber]
 
-func NewSubscriberHub() *SubscriberHub {
+func NewSubscriberHub() *SubHub {
 	stop := func(subscriber Subscriber) {
 		subscriber.Stop()
 	}
@@ -62,7 +62,7 @@ type PublisherFactory struct {
 	SetupAmqp    SetupAmqpAll
 	ProducerName string
 	NewEgressMux func(ch **amqp.Channel) *EgressMux
-	PubHub       *PublisherHub
+	PubHub       *PubHub
 	Lifecycle    func(lifecycle *Artifex.Lifecycle)
 }
 
@@ -137,7 +137,7 @@ func (f *PublisherFactory) CreatePublisher() (Publisher, error) {
 		}
 	})
 
-	return opt.BuildPublisher()
+	return opt.Build()
 }
 
 type SubscriberFactory struct {
@@ -146,7 +146,7 @@ type SubscriberFactory struct {
 	NewConsumer   func(ch *amqp.Channel) (<-chan amqp.Delivery, error)
 	ConsumerName  string
 	NewIngressMux func() *IngressMux
-	SubHub        *SubscriberHub
+	SubHub        *SubHub
 	Lifecycle     func(lifecycle *Artifex.Lifecycle)
 }
 
@@ -235,7 +235,7 @@ func (f *SubscriberFactory) CreateSubscriber() (Subscriber, error) {
 		}
 	})
 
-	return opt.BuildSubscriber()
+	return opt.Build()
 }
 
 //

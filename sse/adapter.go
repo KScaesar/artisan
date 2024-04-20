@@ -14,28 +14,74 @@ import (
 type MultiPublisher interface {
 	Send(messages ...*Egress) error
 	Shutdown()
-	StopPublishers(filter func(SinglePublisher) bool)
+	StopPublisher(filter func(Publisher) bool)
 }
 
-type SinglePublisher interface {
+type Publisher interface {
 	Artifex.IAdapter
 	Send(messages ...*Egress) error
 }
 
-type Hub = Artifex.Hub[SinglePublisher]
+//
+
+type RemotePubHub interface {
+	FindByKey(sseId string) (pub Publisher, found bool)
+	RemoveByKey(sseId string)
+	StopAll()
+}
+
+type PubHub = Artifex.Hub[Publisher]
 
 func NewHub() *Hub {
-	stop := func(publisher SinglePublisher) {
+	stop := func(publisher Publisher) {
 		publisher.Stop()
 	}
-	return Artifex.NewHub(stop)
+	return &Hub{
+		Local: Artifex.NewHub(stop),
+	}
+}
+
+type Hub struct {
+	Remote RemotePubHub
+	Local  *PubHub
+}
+
+func (hub *Hub) Join(sseId string, pub Publisher) error {
+	if hub.Remote == nil {
+		return hub.Local.Join(sseId, pub)
+	}
+
+	_, found := hub.Remote.FindByKey(sseId)
+	if found {
+		hub.Remote.RemoveByKey(sseId)
+	}
+	return hub.Local.Join(sseId, pub)
+}
+
+func (hub *Hub) FindByKey(sseId string) (pub Publisher, found bool) {
+	if hub.Remote == nil {
+		return hub.Local.FindByKey(sseId)
+	}
+
+	pub, found = hub.Remote.FindByKey(sseId)
+	if found {
+		return pub, found
+	}
+	return hub.Local.FindByKey(sseId)
+}
+
+func (hub *Hub) StopAll() {
+	if hub.Remote != nil {
+		hub.Remote.StopAll()
+	}
+	hub.Local.StopAll()
 }
 
 //
 
 func DefaultServer() *Server {
 	return &Server{
-		Authenticate: func(w http.ResponseWriter, r *http.Request, hub *Hub) (sseId string, err error) {
+		Authenticate: func(w http.ResponseWriter, r *http.Request) (sseId string, err error) {
 			return Artifex.GenerateRandomCode(6), nil
 		},
 		Mux:         NewEgressMux(),
@@ -47,7 +93,7 @@ func DefaultServer() *Server {
 }
 
 type Server struct {
-	Authenticate func(w http.ResponseWriter, r *http.Request, hub *Hub) (sseId string, err error)
+	Authenticate func(w http.ResponseWriter, r *http.Request) (sseId string, err error)
 	Mux          *EgressMux
 	Hub          *Hub
 	StopMessage  *Egress
@@ -62,11 +108,11 @@ func (f *Server) ServeByGin(c *gin.Context) {
 	}
 	c.Writer.Flush()
 	<-c.Request.Context().Done()
-	f.Hub.RemoveOne(func(publisher SinglePublisher) bool { return publisher == pub })
+	f.Hub.Local.RemoveOne(func(publisher Publisher) bool { return publisher == pub })
 }
 
-func (f *Server) createPublisherByGin(c *gin.Context) (SinglePublisher, error) {
-	sseId, err := f.Authenticate(c.Writer, c.Request, f.Hub)
+func (f *Server) createPublisherByGin(c *gin.Context) (Publisher, error) {
+	sseId, err := f.Authenticate(c.Writer, c.Request)
 	if err != nil {
 		return nil, err
 	}
@@ -125,12 +171,12 @@ func (f *Server) createPublisherByGin(c *gin.Context) (SinglePublisher, error) {
 		}).
 		Lifecycle(func(life *Artifex.Lifecycle) {
 			life.OnOpen(func(adp Artifex.IAdapter) error {
-				return f.Hub.Join(adp.Identifier(), adp.(SinglePublisher))
+				return f.Hub.Join(adp.Identifier(), adp.(Publisher))
 			})
 			f.Lifecycle(c.Writer, c.Request, life)
 		})
 
-	return opt.BuildPublisher()
+	return opt.Build()
 }
 
 func (f *Server) Send(messages ...*Egress) error {
@@ -147,6 +193,6 @@ func (f *Server) Shutdown() {
 	f.Hub.StopAll()
 }
 
-func (f *Server) StopPublishers(filter func(SinglePublisher) bool) {
-	f.Hub.RemoveMulti(filter)
+func (f *Server) StopPublisher(filter func(Publisher) bool) {
+	f.Hub.Local.RemoveMulti(filter)
 }
