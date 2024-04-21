@@ -14,24 +14,24 @@ Provide examples of implementing Artifex's adapters
 package main
 
 func NewSseServer() *sse.Server {
-	server := sse.DefaultServer()
+	sseServer := sse.DefaultServer()
 
-	server.Authenticate = func(w http.ResponseWriter, r *http.Request) (sseId string, err error) {
+	sseServer.Authenticate = func(w http.ResponseWriter, r *http.Request) (sseId string, err error) {
 		userId := r.URL.Query().Get("user_id")
 		return userId, nil
 	}
 
 	once := sync.Once{}
-	server.Lifecycle = func(w http.ResponseWriter, r *http.Request, lifecycle *Artifex.Lifecycle) {
+	sseServer.Lifecycle = func(w http.ResponseWriter, r *http.Request, lifecycle *Artifex.Lifecycle) {
 		userId := r.URL.Query().Get("user_id")
 		gameId := r.URL.Query().Get("game_id")
 		roomId := r.URL.Query().Get("room_id")
 		game := NewGame(gameId, roomId)
 
 		lifecycle.OnOpen(func(adp Artifex.IAdapter) error {
-			CreateGame(game, adp.(sse.Publisher))
-			fmt.Printf("%v %v %v enter: total=%v\n", userId, game.GameId, game.RoomId, server.Hub.Local.Total())
-			if server.Hub.Local.Total() == 4 {
+			Artifex.CreateAppData(adp, AppData_Game, game)
+			fmt.Printf("%v %v %v enter: total=%v\n", userId, game.GameId, game.RoomId, sseServer.Hub.Local.Total())
+			if sseServer.Hub.Local.Total() == 4 {
 				once.Do(func() {
 					close(mqFire)
 				})
@@ -40,19 +40,19 @@ func NewSseServer() *sse.Server {
 		})
 
 		lifecycle.OnStop(func(adp Artifex.IAdapter) {
-			fmt.Printf("%v %v %v leave: total=%v\n", userId, game.GameId, game.RoomId, server.Hub.Local.Total())
+			fmt.Printf("%v %v %v leave: total=%v\n", userId, game.GameId, game.RoomId, sseServer.Hub.Local.Total())
 		})
 	}
 
-	root := server.Mux
+	root := sseServer.Mux
 
 	v0 := root.Group("v0/")
-	v0.SetDefaultHandler(broadcast(server.Hub))
-	v0.Handler("Notification", Notification(server.Hub))
+	v0.SetDefaultHandler(broadcast(sseServer.Hub))
+	v0.Handler("Notification", Notification(sseServer.Hub))
 
 	v1 := root.Group("v1/")
-	v1.Handler("PausedGame", PausedGame(server.Hub))
-	v1.Handler("ChangedRoomMap/{room_id}", ChangedRoomMap(server.Hub))
+	v1.Handler("PausedGame", PausedGame(sseServer.Hub))
+	v1.Handler("ChangedRoomMap/{room_id}", ChangedRoomMap(sseServer.Hub))
 
 	fmt.Println()
 	// [Artifex-SSE] event="v0/.*"                                  f="main.broadcast.func1"
@@ -61,7 +61,7 @@ func NewSseServer() *sse.Server {
 	// [Artifex-SSE] event="v1/PausedGame"                          f="main.PausedGame.func1"
 	root.PrintEndpoints(func(subject, fn string) { fmt.Printf("[Artifex-SSE] event=%-40q f=%q\n", subject, fn) })
 
-	return server
+	return sseServer
 }
 
 func NewHttpServer(sseServer *sse.Server) *http.Server {
