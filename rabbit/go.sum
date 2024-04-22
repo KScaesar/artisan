@@ -32,6 +32,12 @@ github.com/KScaesar/Artifex v0.37.1 h1:Ug0FePyN4RLfuCZhMCojCQvWc7RBlkTUgrFtGr2ro
 github.com/KScaesar/Artifex v0.37.1/go.mod h1:8iDOVeDtJQkelQzbLhNThKHbUDc4xAQ2KZjyEtu8GE8=
 github.com/KScaesar/Artifex v0.37.2 h1:a8GTosnqKBEy99uLP9rXNga2GL7S8m+JLg2vBECGVFw=
 github.com/KScaesar/Artifex v0.37.2/go.mod h1:8iDOVeDtJQkelQzbLhNThKHbUDc4xAQ2KZjyEtu8GE8=
+github.com/KScaesar/Artifex v0.37.3 h1:ZTuHLQZ3v93BkvZcIDgKeVo/KujC/gonZzONCJJ1t94=
+github.com/KScaesar/Artifex v0.37.3/go.mod h1:8iDOVeDtJQkelQzbLhNThKHbUDc4xAQ2KZjyEtu8GE8=
+github.com/KScaesar/Artifex v0.37.4 h1:hfAxoMaDLdflDlFPuzZZXryMTdavGim0X5QTBLDljvY=
+github.com/KScaesar/Artifex v0.37.4/go.mod h1:8iDOVeDtJQkelQzbLhNThKHbUDc4xAQ2KZjyEtu8GE8=
+github.com/KScaesar/Artifex v0.37.5 h1:zh6AgMNstLvpC4PXBugMpx/tX0ZL1IGEDlvRbMwxwE8=
+github.com/KScaesar/Artifex v0.37.5/go.mod h1:8iDOVeDtJQkelQzbLhNThKHbUDc4xAQ2KZjyEtu8GE8=
 github.com/cenkalti/backoff/v4 v4.3.0 h1:MyRJ/UdXutAwSAT+s3wNd7MfTIcy71VQueUuFK343L8=
 github.com/cenkalti/backoff/v4 v4.3.0/go.mod h1:Y3VNntkOUPxTVeUxJ/G5vcM//AlwfmyYozVcomhLiZE=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=

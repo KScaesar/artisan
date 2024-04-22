@@ -17,27 +17,27 @@ func main() {
 	url := "amqp://guest:guest@127.0.0.1:5672"
 	pool := rabbit.NewConnectionPool(url, 2)
 
-	subHub := rabbit.NewSubscriberHub()
-	NewSubscribers(pool, subHub)
+	subHub := NewSubscribers(pool)
 
-	pubHub := rabbit.NewPublisherHub()
-	pub := NewPublisher(pool, pubHub)
+	pub := NewPublisher(pool)
 	fireMessage(pub)
 
 	Artifex.NewShutdown().
 		SetStopAction("amqp_pub", func() error {
-			pubHub.StopAll()
+			pub.Stop()
 			return nil
 		}).
 		SetStopAction("amqp_sub", func() error {
-			subHub.StopAll()
+			subHub.Shutdown()
 			return nil
 		}).
 		Listen(nil)
 }
 
-func NewSubscribers(pool rabbit.ConnectionPool, subHub *rabbit.SubHub) {
-	newIngressMux := NewIngressMux()
+func NewSubscribers(pool rabbit.ConnectionPool) *Artifex.Hub[Artifex.IAdapter] {
+	mux := NewIngressMux()
+	hub := rabbit.NewAdapterHub()
+
 	subFactories := []*rabbit.SubscriberFactory{
 		{
 			Pool: pool,
@@ -47,10 +47,11 @@ func NewSubscribers(pool rabbit.ConnectionPool, subHub *rabbit.SubHub) {
 				SetupTemporaryQueue("test-q1", 10*time.Second),
 				SetupBind("test-q1", "test-ex1", []string{"key1-hello", "key1-world"}),
 			},
-			NewIngressMux: newIngressMux,
-			NewConsumer:   NewConsumer("test-q1", "test-c1", true),
-			ConsumerName:  "test-c1",
-			SubHub:        subHub,
+			IngressMux:      mux,
+			NewConsumer:     NewConsumer("test-q1", "test-c1", true),
+			ConsumerName:    "test-c1",
+			Hub:             hub,
+			DecorateAdapter: DecorateAdapter,
 		},
 		{
 			Pool: pool,
@@ -60,10 +61,11 @@ func NewSubscribers(pool rabbit.ConnectionPool, subHub *rabbit.SubHub) {
 				SetupQueue("test-q2"),
 				SetupTemporaryBind("test-q2", "test-ex2", []string{"key2.*.Game"}, 10*time.Second),
 			},
-			NewIngressMux: newIngressMux,
-			NewConsumer:   NewConsumer("test-q2", "test-c2", true),
-			ConsumerName:  "test-c2",
-			SubHub:        subHub,
+			IngressMux:      mux,
+			NewConsumer:     NewConsumer("test-q2", "test-c2", true),
+			ConsumerName:    "test-c2",
+			Hub:             hub,
+			DecorateAdapter: DecorateAdapter,
 		},
 	}
 
@@ -74,15 +76,15 @@ func NewSubscribers(pool rabbit.ConnectionPool, subHub *rabbit.SubHub) {
 		}
 	}
 
-	subHub.DoAsync(func(sub rabbit.Subscriber) {
-		err := sub.Listen()
-		if err != nil {
-			Artifex.DefaultLogger().Error("%v fail: %v", sub.Identifier(), err)
-		}
+	hub.DoAsync(func(adapter Artifex.IAdapter) {
+		subscriber := adapter.(rabbit.Subscriber)
+		subscriber.Listen()
 	})
+
+	return hub
 }
 
-func NewIngressMux() func() *rabbit.IngressMux {
+func NewIngressMux() *rabbit.IngressMux {
 	mux := rabbit.NewIngressMux()
 
 	mux.Handler("key1-hello", func(message *rabbit.Ingress, _ *Artifex.RouteParam) error {
@@ -108,12 +110,12 @@ func NewIngressMux() func() *rabbit.IngressMux {
 		fmt.Printf("[Rabbit Ingress] Subject=%-40q f=%q\n", v[0], v[1])
 	}
 
-	return func() *rabbit.IngressMux {
-		return mux
-	}
+	return mux
 }
 
-func NewPublisher(pool rabbit.ConnectionPool, pubHub *rabbit.PubHub) rabbit.Publisher {
+func NewPublisher(pool rabbit.ConnectionPool) rabbit.Publisher {
+	hub := rabbit.NewAdapterHub()
+
 	pubFactory := &rabbit.PublisherFactory{
 		Pool: pool,
 		SetupAmqp: []rabbit.SetupAmqp{
@@ -125,9 +127,11 @@ func NewPublisher(pool rabbit.ConnectionPool, pubHub *rabbit.PubHub) rabbit.Publ
 			SetupQueue("test-q2"),
 			SetupTemporaryBind("test-q2", "test-ex2", []string{"key2.*.Game"}, 10*time.Second),
 		},
-		ProducerName: "example_pub",
-		NewEgressMux: NewEgressMux(),
-		PubHub:       pubHub,
+		ProducerName:    "example_pub",
+		NewEgressMux:    NewEgressMux(),
+		Hub:             hub,
+		SendPingSeconds: 30,
+		DecorateAdapter: DecorateAdapter,
 	}
 
 	pub, err := pubFactory.CreatePublisher()
@@ -216,4 +220,15 @@ func fireMessage(pub rabbit.Publisher) {
 			}
 		}()
 	}
+}
+
+func DecorateAdapter(adp Artifex.IAdapter) Artifex.IAdapter {
+	amqpId := Artifex.GenerateRandomCode(6)
+	amqpName := adp.Identifier()
+
+	logger := adp.Log().
+		WithKeyValue("amqp_id", amqpId).
+		WithKeyValue("amqp_name", amqpName)
+	adp.SetLog(logger)
+	return adp
 }

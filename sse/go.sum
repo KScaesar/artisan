@@ -44,6 +44,10 @@ github.com/KScaesar/Artifex v0.37.1 h1:Ug0FePyN4RLfuCZhMCojCQvWc7RBlkTUgrFtGr2ro
 github.com/KScaesar/Artifex v0.37.1/go.mod h1:8iDOVeDtJQkelQzbLhNThKHbUDc4xAQ2KZjyEtu8GE8=
 github.com/KScaesar/Artifex v0.37.2 h1:a8GTosnqKBEy99uLP9rXNga2GL7S8m+JLg2vBECGVFw=
 github.com/KScaesar/Artifex v0.37.2/go.mod h1:8iDOVeDtJQkelQzbLhNThKHbUDc4xAQ2KZjyEtu8GE8=
+github.com/KScaesar/Artifex v0.37.3 h1:ZTuHLQZ3v93BkvZcIDgKeVo/KujC/gonZzONCJJ1t94=
+github.com/KScaesar/Artifex v0.37.3/go.mod h1:8iDOVeDtJQkelQzbLhNThKHbUDc4xAQ2KZjyEtu8GE8=
+github.com/KScaesar/Artifex v0.37.5 h1:zh6AgMNstLvpC4PXBugMpx/tX0ZL1IGEDlvRbMwxwE8=
+github.com/KScaesar/Artifex v0.37.5/go.mod h1:8iDOVeDtJQkelQzbLhNThKHbUDc4xAQ2KZjyEtu8GE8=
 github.com/bytedance/sonic v1.5.0/go.mod h1:ED5hyg4y6t3/9Ku1R6dU/4KyJ48DZ4jPhfY1O2AihPM=
 github.com/bytedance/sonic v1.10.0-rc/go.mod h1:ElCzW+ufi8qKqNW0FY314xriJhyJhuoJ3gFZdAHF7NM=
 github.com/bytedance/sonic v1.11.3 h1:jRN+yEjakWh8aK5FzrciUHG8OFXK+4/KrAX/ysEtHAA=

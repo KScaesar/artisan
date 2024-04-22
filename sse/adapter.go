@@ -27,7 +27,7 @@ type Publisher interface {
 type RemoteHub interface {
 	FindByKey(sseId string) (pub Publisher, found bool)
 	RemoveByKey(sseId string)
-	StopAll()
+	Shutdown()
 }
 
 func NewHub() *Hub {
@@ -42,21 +42,6 @@ func NewHub() *Hub {
 type Hub struct {
 	Remote RemoteHub
 	Local  *Artifex.Hub[Artifex.IAdapter]
-}
-
-func (hub *Hub) FindByKey(sseId string) (pub Publisher, found bool) {
-	if hub.Remote == nil {
-		obj, ok := hub.Local.FindByKey(sseId)
-		return obj.(Publisher), ok
-	}
-
-	pub, found = hub.Remote.FindByKey(sseId)
-	if found {
-		return pub, found
-	}
-
-	obj, ok := hub.Local.FindByKey(sseId)
-	return obj.(Publisher), ok
 }
 
 func (hub *Hub) Join(sseId string, pub Artifex.IAdapter) error {
@@ -75,16 +60,6 @@ func (hub *Hub) RemoveOne(filter func(Artifex.IAdapter) bool) {
 	hub.Local.RemoveOne(filter)
 }
 
-func (hub *Hub) StopAll() {
-	if hub.Remote != nil {
-		hub.Remote.StopAll()
-	}
-	// hub.Local.RemoveMulti(func(adapter Artifex.IAdapter) bool {
-	// 	return true
-	// })
-	hub.Local.StopAll()
-}
-
 //
 
 func DefaultServer() *Server {
@@ -92,23 +67,26 @@ func DefaultServer() *Server {
 		Authenticate: func(w http.ResponseWriter, r *http.Request) (sseId string, err error) {
 			return Artifex.GenerateRandomCode(6), nil
 		},
-		Mux:                 NewEgressMux(),
-		Hub:                 NewHub(),
-		StopMessage:         NewEgress("Disconnect", struct{}{}),
-		PingMessage:         NewEgress("Ping", struct{}{}),
-		PingIntervalSeconds: 10,
+		StopMessage:     NewEgress("Disconnect", struct{}{}),
+		PingMessage:     NewEgress("Ping", struct{}{}),
+		Mux:             NewEgressMux(),
+		Hub:             NewHub(),
+		SendPingSeconds: 10,
 	}
 }
 
 type Server struct {
-	Authenticate        func(w http.ResponseWriter, r *http.Request) (sseId string, err error)
-	Mux                 *EgressMux
-	Hub                 *Hub
-	StopMessage         *Egress
-	PingMessage         *Egress
-	PingIntervalSeconds int
-	DecorateAdapter     func(old Artifex.IAdapter) (fresh Artifex.IAdapter)
-	Lifecycle           func(w http.ResponseWriter, r *http.Request, lifecycle *Artifex.Lifecycle)
+	Authenticate func(w http.ResponseWriter, r *http.Request) (sseId string, err error)
+	StopMessage  *Egress
+	PingMessage  *Egress
+
+	Mux    *EgressMux
+	Hub    *Hub
+	Logger Artifex.Logger
+
+	SendPingSeconds int
+	DecorateAdapter func(old Artifex.IAdapter) (fresh Artifex.IAdapter)
+	Lifecycle       func(w http.ResponseWriter, r *http.Request, lifecycle *Artifex.Lifecycle)
 }
 
 func (f *Server) ServeByGin(c *gin.Context) {
@@ -134,6 +112,7 @@ func (f *Server) createPublisherByGin(c *gin.Context) (Publisher, error) {
 	opt := Artifex.NewPublisherOption[Egress]().
 		Identifier(sseId).
 		AdapterHub(f.Hub).
+		Logger(f.Logger).
 		DecorateAdapter(f.DecorateAdapter).
 		Lifecycle(func(life *Artifex.Lifecycle) {
 			f.Lifecycle(c.Writer, c.Request, life)
@@ -153,19 +132,19 @@ func (f *Server) createPublisherByGin(c *gin.Context) (Publisher, error) {
 			}
 			waitPong <- nil
 			return nil
-		}, waitPong, f.PingIntervalSeconds*2).
+		}, waitPong, f.SendPingSeconds*2).
 		AdapterSend(func(adp Artifex.IAdapter, message *Egress) error {
 			select {
 			case <-disconnect:
 			default:
 				mu.Lock()
 				defer mu.Unlock()
-				adp.Log().Info("sse send")
 				c.Render(-1, sse.Event{
 					Event: message.Subject,
 					Id:    message.MsgId(),
 					Data:  message.AppMsg,
 				})
+				adp.Log().WithKeyValue("msg_id", message.MsgId()).Info("send %q", message.Subject)
 				c.Writer.Flush()
 			}
 			return nil
@@ -176,12 +155,12 @@ func (f *Server) createPublisherByGin(c *gin.Context) (Publisher, error) {
 			default:
 				mu.Lock()
 				defer mu.Unlock()
-				adp.Log().Info("sse stopped")
 				message := f.StopMessage
 				c.Render(-1, sse.Event{
 					Event: message.Subject,
 					Data:  message.AppMsg,
 				})
+				adp.Log().Info("sse stop")
 				c.Writer.Flush()
 			}
 			return nil
@@ -205,7 +184,10 @@ func (f *Server) Send(messages ...*Egress) error {
 }
 
 func (f *Server) Shutdown() {
-	f.Hub.StopAll()
+	if f.Hub.Remote != nil {
+		f.Hub.Remote.Shutdown()
+	}
+	f.Hub.Local.Shutdown()
 }
 
 func (f *Server) StopPublisher(filter func(Publisher) bool) {

@@ -13,14 +13,15 @@ type RoutingKey = string
 
 //
 
-func NewIngress(amqpMsg *amqp.Delivery, logger Artifex.Logger) *Ingress {
+func NewIngress(amqpMsg *amqp.Delivery, adp Artifex.IAdapter) *Ingress {
 	msgId := amqpMsg.MessageId
 	if msgId == "" {
 		msgId = Artifex.GenerateUlid()
 	}
 
-	logger = logger.WithKeyValue("msg_id", msgId)
+	logger := adp.Log().WithKeyValue("msg_id", msgId)
 	logger.Info("recv %q", amqpMsg.RoutingKey)
+
 	return &Ingress{
 		MsgId:      msgId,
 		Body:       amqpMsg.Body,

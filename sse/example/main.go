@@ -44,7 +44,7 @@ func NewSseServer() *sse.Server {
 		userId := r.URL.Query().Get("user_id")
 		return userId, nil
 	}
-	sseServer.DecorateAdapter = WrapSession
+	sseServer.DecorateAdapter = DecorateAdapter
 
 	once := sync.Once{}
 	sseServer.Lifecycle = func(w http.ResponseWriter, r *http.Request, lifecycle *Artifex.Lifecycle) {
@@ -70,7 +70,7 @@ func NewSseServer() *sse.Server {
 		})
 	}
 
-	root := sseServer.Mux
+	root := sseServer.Mux.Transform(transform)
 
 	v0 := root.Group("v0/")
 	v0.SetDefaultHandler(broadcast(sseServer.Hub))
@@ -114,6 +114,15 @@ func NewHttpServer(sseServer *sse.Server, shutdown *Artifex.Shutdown) *http.Serv
 
 // handler
 
+func transform(message *sse.Egress, route *Artifex.RouteParam) error {
+	version := message.Metadata.Str("version")
+	if version != "" {
+		message.Subject = version + message.Subject
+		delete(message.Metadata, "version")
+	}
+	return nil
+}
+
 func broadcast(hub *sse.Hub) sse.EgressHandleFunc {
 	return func(message *sse.Egress, route *Artifex.RouteParam) error {
 		// broadcast by onMessage:
@@ -122,10 +131,11 @@ func broadcast(hub *sse.Hub) sse.EgressHandleFunc {
 		// https://stackoverflow.com/a/42803814/9288569
 		event := message.Subject
 		message.Subject = "message"
+		msgId := message.MsgId()
 
 		hub.Local.DoAsync(func(adp Artifex.IAdapter) {
-			sess := UnwrapSession(adp)
-			sess.Logger().Info("send broadcast %v\n", event)
+			sess := adp.(*Session)
+			sess.Logger().WithKeyValue("msg_id", msgId).Info("send broadcast %v\n", event)
 			sess.Send(message)
 		})
 		return nil
@@ -139,6 +149,7 @@ func Notification(hub *sse.Hub) sse.EgressHandleFunc {
 		// user_id from metadata
 
 		user_ids := message.Metadata.StringsByStr("user_id")
+		msgId := message.MsgId()
 
 		adapters, found := hub.Local.FindMultiByKey(user_ids)
 		if !found {
@@ -146,8 +157,8 @@ func Notification(hub *sse.Hub) sse.EgressHandleFunc {
 		}
 
 		for _, adp := range adapters {
-			sess := UnwrapSession(adp)
-			sess.Logger().Info("send %v\n", message.Subject)
+			sess := adp.(*Session)
+			sess.Logger().WithKeyValue("msg_id", msgId).Info("send %v\n", message.Subject)
 			go sess.Send(message)
 		}
 		return nil
@@ -165,16 +176,18 @@ func PausedGame(hub *sse.Hub) sse.EgressHandleFunc {
 		event := message.Subject
 		message.Subject = "message"
 		gameId := message.Metadata.Str("game_id")
+		msgId := message.MsgId()
 
-		hub.Local.DoAsync(func(adp Artifex.IAdapter) {
-			sess := UnwrapSession(adp)
+		hub.Local.DoSync(func(adp Artifex.IAdapter) bool {
+			sess := adp.(*Session)
 
 			if sess.GameId != gameId {
-				return
+				return false
 			}
 
-			sess.Logger().Info("send %v\n", event)
+			sess.Logger().WithKeyValue("msg_id", msgId).Info("send %v\n", event)
 			sess.Send(message)
+			return false
 		})
 
 		message.Subject = event
@@ -195,14 +208,15 @@ func ChangedRoomMap(hub *sse.Hub) sse.EgressHandleFunc {
 		// In order to remove 'RouteParam', original Subject = "v1/ChangedRoomMap/{room_id}"
 		event := message.Subject
 		message.Subject = "v1/ChangedRoomMap"
+		msgId := message.MsgId()
 
 		hub.Local.DoAsync(func(adp Artifex.IAdapter) {
-			sess := UnwrapSession(adp)
+			sess := adp.(*Session)
 			if sess.RoomId != roomId {
 				return
 			}
 
-			sess.Logger().Info("send %v:\n", event)
+			sess.Logger().WithKeyValue("msg_id", msgId).Info("send %v:\n", event)
 			sess.Send(message)
 		})
 
@@ -284,7 +298,7 @@ func fireMessage(sseServer sse.MultiPublisher) {
 		sseServer.Send(message())
 	}
 
-	fmt.Println("fireMessage finish !!!")
+	Artifex.DefaultLogger().Info("fireMessage finish !!!")
 	time.Sleep(time.Second)
 
 	sseServer.StopPublisher(func(pub sse.Publisher) bool {
@@ -294,19 +308,25 @@ func fireMessage(sseServer sse.MultiPublisher) {
 
 // session
 
-func WrapSession(adp Artifex.IAdapter) Artifex.IAdapter {
-	logger := adp.Log().WithKeyValue("sse_id", adp.Identifier())
+func DecorateAdapter(adp Artifex.IAdapter) Artifex.IAdapter {
+	sessId := Artifex.GenerateRandomCode(6)
+	userId := adp.Identifier()
+
+	logger := adp.Log().
+		WithKeyValue("sess_id", sessId).
+		WithKeyValue("user_id", userId)
 	adp.SetLog(logger)
+
 	return &Session{
+		SessId:    sessId,
+		UserId:    userId,
 		Publisher: adp.(sse.Publisher),
 	}
 }
 
-func UnwrapSession(pub Artifex.IAdapter) *Session {
-	return pub.(*Session)
-}
-
 type Session struct {
+	SessId string
+	UserId string
 	GameId string
 	RoomId string
 

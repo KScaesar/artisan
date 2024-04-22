@@ -20,17 +20,18 @@ func NewSseServer() *sse.Server {
 		userId := r.URL.Query().Get("user_id")
 		return userId, nil
 	}
+	sseServer.DecorateAdapter = DecorateAdapter
 
 	once := sync.Once{}
 	sseServer.Lifecycle = func(w http.ResponseWriter, r *http.Request, lifecycle *Artifex.Lifecycle) {
-		userId := r.URL.Query().Get("user_id")
 		gameId := r.URL.Query().Get("game_id")
 		roomId := r.URL.Query().Get("room_id")
-		game := NewGame(gameId, roomId)
 
 		lifecycle.OnOpen(func(adp Artifex.IAdapter) error {
-			Artifex.CreateAppData(adp, AppData_Game, game)
-			fmt.Printf("%v %v %v enter: total=%v\n", userId, game.GameId, game.RoomId, sseServer.Hub.Local.Total())
+			sess := adp.(*Session)
+			sess.Init(gameId, roomId)
+
+			sess.Logger().Info("enter: total=%v\n", sseServer.Hub.Local.Total())
 			if sseServer.Hub.Local.Total() == 4 {
 				once.Do(func() {
 					close(mqFire)
@@ -40,11 +41,12 @@ func NewSseServer() *sse.Server {
 		})
 
 		lifecycle.OnStop(func(adp Artifex.IAdapter) {
-			fmt.Printf("%v %v %v leave: total=%v\n", userId, game.GameId, game.RoomId, sseServer.Hub.Local.Total())
+			sess := adp.(*Session)
+			sess.Logger().Info("leave: total=%v\n", sseServer.Hub.Local.Total())
 		})
 	}
 
-	root := sseServer.Mux
+	root := sseServer.Mux.Transform(transform)
 
 	v0 := root.Group("v0/")
 	v0.SetDefaultHandler(broadcast(sseServer.Hub))
@@ -64,18 +66,22 @@ func NewSseServer() *sse.Server {
 	return sseServer
 }
 
-func NewHttpServer(sseServer *sse.Server) *http.Server {
+func NewHttpServer(sseServer *sse.Server, shutdown *Artifex.Shutdown) *http.Server {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.Default()
 
 	router.StaticFile("/", "./index.html")
 	router.GET("/stream", sse.HeadersByGin(true), sseServer.ServeByGin)
+	router.GET("/shutdown", func(c *gin.Context) {
+		shutdown.NotifyStop(nil)
+		c.String(200, "")
+	})
 
 	httpServer := &http.Server{Handler: router, Addr: ":18888"}
 	go func() {
 		err := httpServer.ListenAndServe()
 		if err != nil {
-			fmt.Println("http server fail:", err)
+			Artifex.DefaultLogger().Error("http server fail: %v", err)
 		}
 	}()
 

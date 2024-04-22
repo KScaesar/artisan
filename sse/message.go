@@ -59,14 +59,8 @@ type EgressMux = Artifex.Mux[Egress]
 
 func NewEgressMux() *EgressMux {
 	getEvent := func(message *Egress) string {
-		version := message.Metadata.Str("version")
-		if version != "" {
-			message.Subject = version + message.Subject
-			delete(message.Metadata, "version")
-		}
 		return message.Subject
 	}
-
 	mux := Artifex.DefaultMux(getEvent)
 	return mux
 }
