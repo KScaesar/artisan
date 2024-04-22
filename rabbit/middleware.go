@@ -11,9 +11,9 @@ func PrintIngressError() IngressMiddleware {
 		return func(message *Ingress, route *Artifex.RouteParam) error {
 			err := next(message, route)
 			if err != nil {
-				message.Logger.Error("handle %q fail: %v", message.RoutingKey, err)
+				message.Logger.Error("handle %q: %v", message.RoutingKey, err)
 			}
-			message.Logger.Info("handle %q success", message.RoutingKey)
+			message.Logger.Info("handle %q", message.RoutingKey)
 			return nil
 		}
 	}

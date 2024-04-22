@@ -63,28 +63,40 @@ func (hub *Hub) RemoveOne(filter func(Artifex.IAdapter) bool) {
 //
 
 func DefaultServer() *Server {
+	hub := NewHub()
+	mux := NewEgressMux()
+
+	mux.SetDefaultHandler(func(message *Egress, _ *Artifex.RouteParam) error {
+		hub.Local.DoSync(func(adp Artifex.IAdapter) (stop bool) {
+			publisher := adp.(Publisher)
+			publisher.Send(message)
+			return false
+		})
+		return nil
+	})
+
 	return &Server{
+		Hub:             hub,
+		SendPingSeconds: 15,
+		StopMessage:     NewEgress("Disconnect", struct{}{}),
+		PingMessage:     NewEgress("Ping", struct{}{}),
+
 		Authenticate: func(w http.ResponseWriter, r *http.Request) (sseId string, err error) {
 			return Artifex.GenerateRandomCode(6), nil
 		},
-		StopMessage:     NewEgress("Disconnect", struct{}{}),
-		PingMessage:     NewEgress("Ping", struct{}{}),
-		Mux:             NewEgressMux(),
-		Hub:             NewHub(),
-		SendPingSeconds: 10,
+		EgressMux: mux,
 	}
 }
 
 type Server struct {
-	Authenticate func(w http.ResponseWriter, r *http.Request) (sseId string, err error)
-	StopMessage  *Egress
-	PingMessage  *Egress
-
-	Mux    *EgressMux
-	Hub    *Hub
-	Logger Artifex.Logger
-
+	Hub             *Hub
+	Logger          Artifex.Logger
 	SendPingSeconds int
+	PingMessage     *Egress
+	StopMessage     *Egress
+
+	Authenticate    func(w http.ResponseWriter, r *http.Request) (sseId string, err error)
+	EgressMux       *EgressMux
 	DecorateAdapter func(old Artifex.IAdapter) (fresh Artifex.IAdapter)
 	Lifecycle       func(w http.ResponseWriter, r *http.Request, lifecycle *Artifex.Lifecycle)
 }
@@ -107,7 +119,6 @@ func (f *Server) createPublisherByGin(c *gin.Context) (Publisher, error) {
 
 	var mu sync.Mutex
 	disconnect := c.Request.Context().Done()
-	waitPong := make(chan error, 1)
 
 	opt := Artifex.NewPublisherOption[Egress]().
 		Identifier(sseId).
@@ -117,22 +128,6 @@ func (f *Server) createPublisherByGin(c *gin.Context) (Publisher, error) {
 		Lifecycle(func(life *Artifex.Lifecycle) {
 			f.Lifecycle(c.Writer, c.Request, life)
 		}).
-		SendPing(func() error {
-			select {
-			case <-disconnect:
-			default:
-				mu.Lock()
-				defer mu.Unlock()
-				message := f.PingMessage
-				c.Render(-1, sse.Event{
-					Event: message.Subject,
-					Data:  message.AppMsg,
-				})
-				c.Writer.Flush()
-			}
-			waitPong <- nil
-			return nil
-		}, waitPong, f.SendPingSeconds*2).
 		AdapterSend(func(adp Artifex.IAdapter, message *Egress) error {
 			select {
 			case <-disconnect:
@@ -150,6 +145,10 @@ func (f *Server) createPublisherByGin(c *gin.Context) (Publisher, error) {
 			return nil
 		}).
 		AdapterStop(func(adp Artifex.IAdapter) error {
+			if f.StopMessage == nil {
+				return nil
+			}
+
 			select {
 			case <-disconnect:
 			default:
@@ -166,6 +165,26 @@ func (f *Server) createPublisherByGin(c *gin.Context) (Publisher, error) {
 			return nil
 		})
 
+	if f.SendPingSeconds > 0 {
+		waitPong := make(chan error, 1)
+		opt.SendPing(func() error {
+			select {
+			case <-disconnect:
+			default:
+				mu.Lock()
+				defer mu.Unlock()
+				message := f.PingMessage
+				c.Render(-1, sse.Event{
+					Event: message.Subject,
+					Data:  message.AppMsg,
+				})
+				c.Writer.Flush()
+			}
+			waitPong <- nil
+			return nil
+		}, waitPong, f.SendPingSeconds*2)
+	}
+
 	pub, err := opt.Build()
 	if err != nil {
 		return nil, err
@@ -175,7 +194,7 @@ func (f *Server) createPublisherByGin(c *gin.Context) (Publisher, error) {
 
 func (f *Server) Send(messages ...*Egress) error {
 	for _, message := range messages {
-		err := f.Mux.HandleMessage(message, nil)
+		err := f.EgressMux.HandleMessage(message, nil)
 		if err != nil {
 			return err
 		}

@@ -61,6 +61,9 @@ func NewEgressMux() *EgressMux {
 	getEvent := func(message *Egress) string {
 		return message.Subject
 	}
-	mux := Artifex.DefaultMux(getEvent)
+	mux := Artifex.NewMux("/", getEvent)
+
+	middleware := Artifex.MW[Egress]{}
+	mux.Middleware(middleware.Recover())
 	return mux
 }

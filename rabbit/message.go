@@ -61,9 +61,11 @@ func NewIngressMux() *IngressMux {
 	getRoutingKey := func(message *Ingress) string {
 		return message.RoutingKey
 	}
-
 	mux := Artifex.NewMux(".", getRoutingKey)
 	mux.SetHandleError(PrintIngressError())
+
+	middleware := Artifex.MW[Ingress]{}
+	mux.Middleware(middleware.Recover())
 	return mux
 }
 
@@ -118,7 +120,9 @@ func NewEgressMux() *EgressMux {
 	getRoutingKey := func(message *Egress) string {
 		return message.Subject
 	}
-
 	mux := Artifex.NewMux(".", getRoutingKey)
+
+	middleware := Artifex.MW[Egress]{}
+	mux.Middleware(middleware.Recover())
 	return mux
 }

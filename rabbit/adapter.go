@@ -45,15 +45,14 @@ func NewAdapterHub() *Artifex.Hub[Artifex.IAdapter] {
 //
 
 type PublisherFactory struct {
-	Pool         ConnectionPool
-	SetupAmqp    SetupAmqpAll
-	ProducerName string
-
-	NewEgressMux func(ch **amqp.Channel) *EgressMux
-	Hub          *Artifex.Hub[Artifex.IAdapter]
-	Logger       Artifex.Logger
-
+	Pool            ConnectionPool
+	Hub             *Artifex.Hub[Artifex.IAdapter]
+	Logger          Artifex.Logger
 	SendPingSeconds int
+
+	SetupAmqp       SetupAmqpAll
+	ProducerName    string
+	EgressMux       func(ch **amqp.Channel) *EgressMux
 	DecorateAdapter func(old Artifex.IAdapter) (fresh Artifex.IAdapter)
 	Lifecycle       func(lifecycle *Artifex.Lifecycle)
 }
@@ -91,7 +90,7 @@ func (f *PublisherFactory) CreatePublisher() (Publisher, error) {
 			return nil
 		}, waitNotify, f.SendPingSeconds*2)
 
-	egressMux := f.NewEgressMux(&channel)
+	egressMux := f.EgressMux(&channel)
 	opt.AdapterSend(func(adp Artifex.IAdapter, message *Egress) error {
 		err := egressMux.HandleMessage(message, nil)
 		logger := adp.Log().WithKeyValue("msg_id", message.MsgId())
@@ -106,10 +105,10 @@ func (f *PublisherFactory) CreatePublisher() (Publisher, error) {
 	opt.AdapterStop(func(adp Artifex.IAdapter) error {
 		err := channel.Close()
 		if err != nil {
-			adp.Log().Error("amqp stop: %v", err)
+			adp.Log().Error("amqp_pub stop: %v", err)
 			return err
 		}
-		adp.Log().Info("amqp stop")
+		adp.Log().Info("amqp_pub stop")
 		return nil
 	})
 
@@ -124,16 +123,14 @@ func (f *PublisherFactory) CreatePublisher() (Publisher, error) {
 }
 
 type SubscriberFactory struct {
-	Pool         ConnectionPool
-	SetupAmqp    SetupAmqpAll
-	NewConsumer  func(ch *amqp.Channel) (<-chan amqp.Delivery, error)
-	ConsumerName string
+	Pool   ConnectionPool
+	Hub    *Artifex.Hub[Artifex.IAdapter]
+	Logger Artifex.Logger
 
-	IngressMux *IngressMux
-	Hub        *Artifex.Hub[Artifex.IAdapter]
-	Logger     Artifex.Logger
-
-	SendPingSeconds int
+	SetupAmqp       SetupAmqpAll
+	NewConsumer     func(ch *amqp.Channel) (<-chan amqp.Delivery, error)
+	ConsumerName    string
+	IngressMux      *IngressMux
 	DecorateAdapter func(old Artifex.IAdapter) (fresh Artifex.IAdapter)
 	Lifecycle       func(lifecycle *Artifex.Lifecycle)
 }
@@ -182,10 +179,10 @@ func (f *SubscriberFactory) CreateSubscriber() (Subscriber, error) {
 	opt.AdapterStop(func(adp Artifex.IAdapter) error {
 		err := channel.Close()
 		if err != nil {
-			adp.Log().Error("stop: %v", err)
+			adp.Log().Error("amqp_sub stop: %v", err)
 			return err
 		}
-		adp.Log().Info("stop")
+		adp.Log().Info("amqp_sub stop")
 		return nil
 	})
 

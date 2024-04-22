@@ -15,24 +15,52 @@ package main
 
 func NewSseServer() *sse.Server {
 	sseServer := sse.DefaultServer()
-
-	sseServer.Authenticate = func(w http.ResponseWriter, r *http.Request) (sseId string, err error) {
-		userId := r.URL.Query().Get("user_id")
-		return userId, nil
-	}
+	sseServer.Authenticate = Authenticate
+	sseServer.EgressMux = NewMux(sseServer.Hub)
+	sseServer.Lifecycle = Lifecycle(sseServer.Hub)
 	sseServer.DecorateAdapter = DecorateAdapter
+	return sseServer
+}
 
-	once := sync.Once{}
-	sseServer.Lifecycle = func(w http.ResponseWriter, r *http.Request, lifecycle *Artifex.Lifecycle) {
+func Authenticate(w http.ResponseWriter, r *http.Request) (sseId string, err error) {
+	userId := r.URL.Query().Get("user_id")
+	return userId, nil
+}
+
+func NewMux(hub *sse.Hub) *sse.EgressMux {
+	mux := sse.NewEgressMux()
+	root := mux.Transform(transform)
+
+	v0 := root.Group("v0/")
+	v0.SetDefaultHandler(broadcast(hub))
+	v0.Handler("Notification", Notification(hub))
+
+	v1 := root.Group("v1/")
+	v1.Handler("PausedGame", PausedGame(hub))
+	v1.Handler("ChangedRoomMap/{room_id}", ChangedRoomMap(hub))
+
+	fmt.Println()
+	// [Artifex-SSE] event="v0/.*"                                  f="main.broadcast.func1"
+	// [Artifex-SSE] event="v0/Notification"                        f="main.Notification.func1"
+	// [Artifex-SSE] event="v1/ChangedRoomMap/{room_id}"            f="main.ChangedRoomMap.func1"
+	// [Artifex-SSE] event="v1/PausedGame"                          f="main.PausedGame.func1"
+	root.PrintEndpoints(func(subject, fn string) { fmt.Printf("[Artifex-SSE] event=%-40q f=%q\n", subject, fn) })
+
+	return mux
+}
+
+func Lifecycle(hub *sse.Hub) func(w http.ResponseWriter, r *http.Request, lifecycle *Artifex.Lifecycle) {
+	return func(w http.ResponseWriter, r *http.Request, lifecycle *Artifex.Lifecycle) {
 		gameId := r.URL.Query().Get("game_id")
 		roomId := r.URL.Query().Get("room_id")
 
+		once := sync.Once{}
 		lifecycle.OnOpen(func(adp Artifex.IAdapter) error {
 			sess := adp.(*Session)
 			sess.Init(gameId, roomId)
 
-			sess.Logger().Info("enter: total=%v\n", sseServer.Hub.Local.Total())
-			if sseServer.Hub.Local.Total() == 4 {
+			sess.Logger().Info("enter: total=%v\n", hub.Local.Total())
+			if hub.Local.Total() == 4 {
 				once.Do(func() {
 					close(mqFire)
 				})
@@ -42,28 +70,9 @@ func NewSseServer() *sse.Server {
 
 		lifecycle.OnStop(func(adp Artifex.IAdapter) {
 			sess := adp.(*Session)
-			sess.Logger().Info("leave: total=%v\n", sseServer.Hub.Local.Total())
+			sess.Logger().Info("leave: total=%v\n", hub.Local.Total())
 		})
 	}
-
-	root := sseServer.Mux.Transform(transform)
-
-	v0 := root.Group("v0/")
-	v0.SetDefaultHandler(broadcast(sseServer.Hub))
-	v0.Handler("Notification", Notification(sseServer.Hub))
-
-	v1 := root.Group("v1/")
-	v1.Handler("PausedGame", PausedGame(sseServer.Hub))
-	v1.Handler("ChangedRoomMap/{room_id}", ChangedRoomMap(sseServer.Hub))
-
-	fmt.Println()
-	// [Artifex-SSE] event="v0/.*"                                  f="main.broadcast.func1"
-	// [Artifex-SSE] event="v0/Notification"                        f="main.Notification.func1"
-	// [Artifex-SSE] event="v1/ChangedRoomMap/{room_id}"            f="main.ChangedRoomMap.func1"
-	// [Artifex-SSE] event="v1/PausedGame"                          f="main.PausedGame.func1"
-	root.PrintEndpoints(func(subject, fn string) { fmt.Printf("[Artifex-SSE] event=%-40q f=%q\n", subject, fn) })
-
-	return sseServer
 }
 
 func NewHttpServer(sseServer *sse.Server, shutdown *Artifex.Shutdown) *http.Server {

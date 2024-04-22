@@ -41,30 +41,30 @@ func NewSubscribers(pool rabbit.ConnectionPool) *Artifex.Hub[Artifex.IAdapter] {
 	subFactories := []*rabbit.SubscriberFactory{
 		{
 			Pool: pool,
+			Hub:  hub,
 			SetupAmqp: []rabbit.SetupAmqp{
 				SetupQos(1),
 				SetupExchange("test-ex1", "direct"),
 				SetupTemporaryQueue("test-q1", 10*time.Second),
 				SetupBind("test-q1", "test-ex1", []string{"key1-hello", "key1-world"}),
 			},
-			IngressMux:      mux,
 			NewConsumer:     NewConsumer("test-q1", "test-c1", true),
 			ConsumerName:    "test-c1",
-			Hub:             hub,
+			IngressMux:      mux,
 			DecorateAdapter: DecorateAdapter,
 		},
 		{
 			Pool: pool,
+			Hub:  hub,
 			SetupAmqp: []rabbit.SetupAmqp{
 				SetupQos(1),
 				SetupExchange("test-ex2", "topic"),
 				SetupQueue("test-q2"),
 				SetupTemporaryBind("test-q2", "test-ex2", []string{"key2.*.Game"}, 10*time.Second),
 			},
-			IngressMux:      mux,
 			NewConsumer:     NewConsumer("test-q2", "test-c2", true),
 			ConsumerName:    "test-c2",
-			Hub:             hub,
+			IngressMux:      mux,
 			DecorateAdapter: DecorateAdapter,
 		},
 	}
@@ -117,7 +117,9 @@ func NewPublisher(pool rabbit.ConnectionPool) rabbit.Publisher {
 	hub := rabbit.NewAdapterHub()
 
 	pubFactory := &rabbit.PublisherFactory{
-		Pool: pool,
+		Pool:            pool,
+		Hub:             hub,
+		SendPingSeconds: 20,
 		SetupAmqp: []rabbit.SetupAmqp{
 			SetupExchange("test-ex1", "direct"),
 			SetupTemporaryQueue("test-q1", 10*time.Second),
@@ -128,9 +130,7 @@ func NewPublisher(pool rabbit.ConnectionPool) rabbit.Publisher {
 			SetupTemporaryBind("test-q2", "test-ex2", []string{"key2.*.Game"}, 10*time.Second),
 		},
 		ProducerName:    "example_pub",
-		NewEgressMux:    NewEgressMux(),
-		Hub:             hub,
-		SendPingSeconds: 30,
+		EgressMux:       NewEgressMux(),
 		DecorateAdapter: DecorateAdapter,
 	}
 
