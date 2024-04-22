@@ -3,7 +3,7 @@ module github.com/KScaesar/Artifex-Adapter/sse
 go 1.18
 
 require (
-	github.com/KScaesar/Artifex v0.34.1
+	github.com/KScaesar/Artifex v0.37.2
 	github.com/gin-gonic/gin v1.9.1
 	github.com/gookit/goutil v0.6.15
 )

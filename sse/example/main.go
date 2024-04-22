@@ -19,9 +19,10 @@ func main() {
 	sseServer := NewSseServer()
 	go fireMessage(sseServer)
 
-	httpServer := NewHttpServer(sseServer)
+	shutdown := Artifex.NewShutdown()
+	httpServer := NewHttpServer(sseServer, shutdown)
 
-	Artifex.NewShutdown().
+	shutdown.
 		SetStopAction("sse", func() error {
 			sseServer.Shutdown()
 			return nil
@@ -43,17 +44,18 @@ func NewSseServer() *sse.Server {
 		userId := r.URL.Query().Get("user_id")
 		return userId, nil
 	}
+	sseServer.DecorateAdapter = WrapSession
 
 	once := sync.Once{}
 	sseServer.Lifecycle = func(w http.ResponseWriter, r *http.Request, lifecycle *Artifex.Lifecycle) {
-		userId := r.URL.Query().Get("user_id")
 		gameId := r.URL.Query().Get("game_id")
 		roomId := r.URL.Query().Get("room_id")
-		game := NewGame(gameId, roomId)
 
 		lifecycle.OnOpen(func(adp Artifex.IAdapter) error {
-			Artifex.CreateAppData(adp, AppData_Game, game)
-			fmt.Printf("%v %v %v enter: total=%v\n", userId, game.GameId, game.RoomId, sseServer.Hub.Local.Total())
+			sess := adp.(*Session)
+			sess.Init(gameId, roomId)
+
+			sess.Logger().Info("enter: total=%v\n", sseServer.Hub.Local.Total())
 			if sseServer.Hub.Local.Total() == 4 {
 				once.Do(func() {
 					close(mqFire)
@@ -63,7 +65,8 @@ func NewSseServer() *sse.Server {
 		})
 
 		lifecycle.OnStop(func(adp Artifex.IAdapter) {
-			fmt.Printf("%v %v %v leave: total=%v\n", userId, game.GameId, game.RoomId, sseServer.Hub.Local.Total())
+			sess := adp.(*Session)
+			sess.Logger().Info("leave: total=%v\n", sseServer.Hub.Local.Total())
 		})
 	}
 
@@ -87,18 +90,22 @@ func NewSseServer() *sse.Server {
 	return sseServer
 }
 
-func NewHttpServer(sseServer *sse.Server) *http.Server {
+func NewHttpServer(sseServer *sse.Server, shutdown *Artifex.Shutdown) *http.Server {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.Default()
 
 	router.StaticFile("/", "./index.html")
 	router.GET("/stream", sse.HeadersByGin(true), sseServer.ServeByGin)
+	router.GET("/shutdown", func(c *gin.Context) {
+		shutdown.NotifyStop(nil)
+		c.String(200, "")
+	})
 
 	httpServer := &http.Server{Handler: router, Addr: ":18888"}
 	go func() {
 		err := httpServer.ListenAndServe()
 		if err != nil {
-			fmt.Println("http server fail:", err)
+			Artifex.DefaultLogger().Error("http server fail: %v", err)
 		}
 	}()
 
@@ -116,9 +123,10 @@ func broadcast(hub *sse.Hub) sse.EgressHandleFunc {
 		event := message.Subject
 		message.Subject = "message"
 
-		hub.Local.DoAsync(func(pub sse.Publisher) {
-			fmt.Printf("send broadcast %v: user_id=%v\n", event, pub.Identifier())
-			pub.Send(message)
+		hub.Local.DoAsync(func(adp Artifex.IAdapter) {
+			sess := UnwrapSession(adp)
+			sess.Logger().Info("send broadcast %v\n", event)
+			sess.Send(message)
 		})
 		return nil
 	}
@@ -132,14 +140,15 @@ func Notification(hub *sse.Hub) sse.EgressHandleFunc {
 
 		user_ids := message.Metadata.StringsByStr("user_id")
 
-		pubs, found := hub.Local.FindMultiByKey(user_ids)
+		adapters, found := hub.Local.FindMultiByKey(user_ids)
 		if !found {
-			return fmt.Errorf("not found: user_id=%v\n", user_ids)
+			return fmt.Errorf("not found: user_id=%v", user_ids)
 		}
 
-		for _, pub := range pubs {
-			fmt.Printf("send %v: user_id=%v\n", message.Subject, pub.Identifier())
-			go pub.Send(message)
+		for _, adp := range adapters {
+			sess := UnwrapSession(adp)
+			sess.Logger().Info("send %v\n", message.Subject)
+			go sess.Send(message)
 		}
 		return nil
 	}
@@ -157,22 +166,19 @@ func PausedGame(hub *sse.Hub) sse.EgressHandleFunc {
 		message.Subject = "message"
 		gameId := message.Metadata.Str("game_id")
 
-		hubFilter := func(pub sse.Publisher) bool {
-			return Artifex.HasAppData(pub, true, AppData_Game, func(game *Game) bool {
-				return game.GameId == gameId
-			})
-		}
-		pubs, found := hub.Local.FindMulti(hubFilter)
-		if !found {
-			return fmt.Errorf("not found: game_id=%v\n", gameId)
-		}
+		hub.Local.DoAsync(func(adp Artifex.IAdapter) {
+			sess := UnwrapSession(adp)
 
-		for _, pub := range pubs {
-			fmt.Printf("send %v: user_id=%v game_id=%v\n", event, pub.Identifier(), gameId)
-			pub.Send(message)
-		}
+			if sess.GameId != gameId {
+				return
+			}
+
+			sess.Logger().Info("send %v\n", event)
+			sess.Send(message)
+		})
 
 		message.Subject = event
+
 		return nil
 	}
 }
@@ -181,31 +187,23 @@ func ChangedRoomMap(hub *sse.Hub) sse.EgressHandleFunc {
 	return func(message *sse.Egress, route *Artifex.RouteParam) error {
 		// ChangedRoomMap by addEventListener:
 		// version from metadata
-		// map_id from route metadata
 		// room_id from route param
 
 		// Note: In DoAsync function will get empty data because 'RouteParam' has been reset
-		roomId := route.Str("room_id") // success
+		roomId := route.Str("room_id")
 
 		// In order to remove 'RouteParam', original Subject = "v1/ChangedRoomMap/{room_id}"
 		event := message.Subject
 		message.Subject = "v1/ChangedRoomMap"
-		mapId := message.Metadata.Str("map_id")
 
-		hub.Local.DoAsync(func(pub sse.Publisher) {
-			game, found := Artifex.GetAppData(pub, false, AppData_Game, func(game *Game) bool {
-				return game.RoomId == roomId
-			})
-			if !found {
+		hub.Local.DoAsync(func(adp Artifex.IAdapter) {
+			sess := UnwrapSession(adp)
+			if sess.RoomId != roomId {
 				return
 			}
 
-			Artifex.UpdateAppData(pub, AppData_Game, func(game *Game) {
-				game.ChangeMap(mapId)
-			})
-
-			fmt.Printf("send %v: user_id=%v room_id=%v map_id=%v\n", event, pub.Identifier(), game.RoomId, game.MapId)
-			pub.Send(message)
+			sess.Logger().Info("send %v:\n", event)
+			sess.Send(message)
 		})
 
 		return nil
@@ -263,24 +261,20 @@ func fireMessage(sseServer sse.MultiPublisher) {
 
 		// ChangedRoomMap by addEventListener:
 		// version from metadata
-		// map_id from route metadata
 		// room_id from route param
 		func() *sse.Egress {
 			egress := sse.NewEgress("ChangedRoomMap/1", map[string]any{"y_room_id": "1", "z_map_id": "a"})
 			egress.Metadata.Set("version", "v1/")
-			egress.Metadata.Set("map_id", "a")
 			return egress
 		},
 		func() *sse.Egress {
 			egress := sse.NewEgress("ChangedRoomMap/2", map[string]any{"y_room_id": "2", "z_map_id": "b"})
 			egress.Metadata.Set("version", "v1/")
-			egress.Metadata.Set("map_id", "b")
 			return egress
 		},
 		func() *sse.Egress {
 			egress := sse.NewEgress("ChangedRoomMap/3", map[string]any{"y_room_id": "3", "z_map_id": "c"})
 			egress.Metadata.Set("version", "v1/")
-			egress.Metadata.Set("map_id", "c")
 			return egress
 		},
 	}
@@ -298,24 +292,34 @@ func fireMessage(sseServer sse.MultiPublisher) {
 	})
 }
 
-// AppData
+// session
 
-const AppData_Game = "game"
-
-func NewGame(gameId string, roomId string) *Game {
-	return &Game{
-		GameId: gameId,
-		RoomId: roomId,
-		MapId:  "-1",
+func WrapSession(adp Artifex.IAdapter) Artifex.IAdapter {
+	logger := adp.Log().WithKeyValue("sse_id", adp.Identifier())
+	adp.SetLog(logger)
+	return &Session{
+		Publisher: adp.(sse.Publisher),
 	}
 }
 
-type Game struct {
-	GameId string
-	RoomId string
-	MapId  string
+func UnwrapSession(pub Artifex.IAdapter) *Session {
+	return pub.(*Session)
 }
 
-func (g *Game) ChangeMap(mapId string) {
-	g.MapId = mapId
+type Session struct {
+	GameId string
+	RoomId string
+
+	sse.Publisher
+}
+
+func (sess *Session) Logger() Artifex.Logger {
+	return sess.Log().
+		WithKeyValue("game_id", sess.GameId).
+		WithKeyValue("room_id", sess.RoomId)
+}
+
+func (sess *Session) Init(gameId string, roomId string) {
+	sess.GameId = gameId
+	sess.RoomId = roomId
 }
