@@ -66,14 +66,7 @@ func DefaultServer() *Server {
 	hub := NewHub()
 	mux := NewEgressMux()
 
-	mux.SetDefaultHandler(func(message *Egress, _ *Artifex.RouteParam) error {
-		hub.Local.DoSync(func(adp Artifex.IAdapter) (stop bool) {
-			publisher := adp.(Publisher)
-			publisher.Send(message)
-			return false
-		})
-		return nil
-	})
+	mux.SetDefaultHandler(Broadcast(hub))
 
 	return &Server{
 		Hub:             hub,
