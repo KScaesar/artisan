@@ -7,57 +7,27 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-type SetupAmqp func(channel *amqp.Channel) error
-
-type SetupAmqpAll []SetupAmqp
-
-func (all SetupAmqpAll) Execute(channel *amqp.Channel) error {
-	for _, setupAmqp := range all {
-		err := setupAmqp(channel)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
+type Producer = Artifex.Producer
+type Consumer = Artifex.Consumer
 
 //
 
-type Publisher interface {
-	Artifex.IAdapter
-	Send(messages ...*Egress) error
-}
-
-type Subscriber interface {
-	Artifex.IAdapter
-	Listen() (err error)
-}
-
-//
-
-func NewAdapterHub() *Artifex.Hub[Artifex.IAdapter] {
-	hub := Artifex.NewAdapterHub(func(adp Artifex.IAdapter) {
-		adp.Stop()
-	})
-	return hub
-}
-
-//
-
-type PublisherFactory struct {
+type ProducerFactory struct {
 	Pool            ConnectionPool
-	Hub             *Artifex.Hub[Artifex.IAdapter]
+	Hub             *Artifex.Hub
 	Logger          Artifex.Logger
 	SendPingSeconds int
+	MaxRetrySeconds int
 
-	SetupAmqp       SetupAmqpAll
-	ProducerName    string
-	EgressMux       func(ch **amqp.Channel) *EgressMux
-	DecorateAdapter func(old Artifex.IAdapter) (fresh Artifex.IAdapter)
+	SetupAmqp    SetupAmqpAll
+	ProducerName string
+
+	EgressMux       *EgressMux
+	DecorateAdapter func(adapter Artifex.IAdapter) (application Artifex.IAdapter)
 	Lifecycle       func(lifecycle *Artifex.Lifecycle)
 }
 
-func (f *PublisherFactory) CreatePublisher() (Publisher, error) {
+func (f *ProducerFactory) CreateProducer() (producer Producer, err error) {
 	connection, err := f.Pool.GetConnection()
 	if err != nil {
 		return nil, err
@@ -73,69 +43,62 @@ func (f *PublisherFactory) CreatePublisher() (Publisher, error) {
 		return nil, err
 	}
 
-	waitNotify := make(chan error, 1)
-	opt := Artifex.NewPublisherOption[Egress]().
+	opt := Artifex.NewAdapterOption().
+		RawInfra(&channel).
 		Identifier(f.ProducerName).
-		Logger(f.Logger).
 		AdapterHub(f.Hub).
+		Logger(f.Logger).
+		EgressMux(f.EgressMux).
 		DecorateAdapter(f.DecorateAdapter).
-		Lifecycle(f.Lifecycle).
-		SendPing(func() error {
-			defer func() {
-				waitNotify <- nil
-			}()
-			if channel.IsClosed() {
-				return errors.New("publisher is closed")
-			}
-			return nil
-		}, waitNotify, f.SendPingSeconds*2)
+		Lifecycle(f.Lifecycle)
 
-	egressMux := f.EgressMux(&channel)
-	opt.AdapterSend(func(adp Artifex.IAdapter, message *Egress) error {
-		err := egressMux.HandleMessage(message, nil)
-		logger := adp.Log().WithKeyValue("msg_id", message.MsgId())
-		if err != nil {
-			logger.Error("send %q: %v", message.Subject, err)
-			return err
+	waitPong := Artifex.NewWaitPingPong()
+	sendPing := func(adp Artifex.IAdapter) error {
+		defer waitPong.Ack()
+		if channel.IsClosed() {
+			return errors.New("amqp publisher is closed")
 		}
-		logger.Info("send %q", message.Subject)
+		return nil
+	}
+	opt.SendPing(f.SendPingSeconds, waitPong, sendPing)
+
+	opt.AdapterStop(func(logger Artifex.Logger) (err error) {
+		err = channel.Close()
+		if err != nil {
+			logger.Error("stop: %v", err)
+			return
+		}
 		return nil
 	})
 
-	opt.AdapterStop(func(adp Artifex.IAdapter) error {
-		err := channel.Close()
-		if err != nil {
-			adp.Log().Error("amqp_pub stop: %v", err)
-			return err
-		}
-		adp.Log().Info("amqp_pub stop")
-		return nil
+	doFixup := fixup(connection, &channel, f.Pool, f.SetupAmqp.Execute)
+	opt.AdapterFixup(f.MaxRetrySeconds, func(adp Artifex.IAdapter) error {
+		return doFixup(adp)
 	})
-
-	fixup := fixupAmqp(connection, &channel, f.Pool, f.SetupAmqp.Execute)
-	opt.AdapterFixup(0, func(adp Artifex.IAdapter) error { return fixup(adp) })
 
 	adp, err := opt.Build()
 	if err != nil {
-		return nil, err
+		return
 	}
-	return adp.(Publisher), err
+	return adp.(Producer), err
 }
 
-type SubscriberFactory struct {
-	Pool   ConnectionPool
-	Hub    *Artifex.Hub[Artifex.IAdapter]
-	Logger Artifex.Logger
+type ConsumerFactory struct {
+	Pool            ConnectionPool
+	Hub             *Artifex.Hub
+	Logger          Artifex.Logger
+	MaxRetrySeconds int
 
-	SetupAmqp       SetupAmqpAll
-	NewConsumer     func(ch *amqp.Channel) (<-chan amqp.Delivery, error)
-	ConsumerName    string
+	SetupAmqp    SetupAmqpAll
+	NewConsumer  func(ch *amqp.Channel) (<-chan amqp.Delivery, error)
+	ConsumerName string
+
 	IngressMux      *IngressMux
-	DecorateAdapter func(old Artifex.IAdapter) (fresh Artifex.IAdapter)
+	DecorateAdapter func(adapter Artifex.IAdapter) (application Artifex.IAdapter)
 	Lifecycle       func(lifecycle *Artifex.Lifecycle)
 }
 
-func (f *SubscriberFactory) CreateSubscriber() (Subscriber, error) {
+func (f *ConsumerFactory) CreateConsumer() (Consumer, error) {
 	connection, err := f.Pool.GetConnection()
 	if err != nil {
 		return nil, err
@@ -156,49 +119,50 @@ func (f *SubscriberFactory) CreateSubscriber() (Subscriber, error) {
 		return nil, err
 	}
 
-	opt := Artifex.NewSubscriberOption[Ingress]().
+	opt := Artifex.NewAdapterOption().
 		Identifier(f.ConsumerName).
-		Logger(f.Logger).
 		AdapterHub(f.Hub).
+		Logger(f.Logger).
+		IngressMux(f.IngressMux).
 		DecorateAdapter(f.DecorateAdapter).
-		Lifecycle(f.Lifecycle).
-		HandleRecv(f.IngressMux.HandleMessage)
+		Lifecycle(f.Lifecycle)
 
 	consumerIsClose := false
-	opt.AdapterRecv(func(adp Artifex.IAdapter) (*Ingress, error) {
+	opt.AdapterRecv(func(logger Artifex.Logger) (*Artifex.Message, error) {
 		amqpMsg, ok := <-consumer
 		if !ok {
 			consumerIsClose = true
 			err := errors.New("amqp consumer close")
-			adp.Log().Error("%v", err)
+			logger.Error("recv: %v", err)
 			return nil, err
 		}
-		return NewIngress(&amqpMsg, adp), nil
+		return NewIngress(&amqpMsg), nil
 	})
 
-	opt.AdapterStop(func(adp Artifex.IAdapter) error {
-		err := channel.Close()
+	opt.AdapterStop(func(logger Artifex.Logger) (err error) {
+		err = channel.Close()
 		if err != nil {
-			adp.Log().Error("amqp_sub stop: %v", err)
-			return err
+			logger.Error("stop: %v", err)
+			return
 		}
-		adp.Log().Info("amqp_sub stop")
 		return nil
 	})
 
-	fixup := fixupAmqp(connection, &channel, f.Pool, f.SetupAmqp.Execute)
-	opt.AdapterFixup(0, func(adp Artifex.IAdapter) error {
-		if err := fixup(adp); err != nil {
+	doFixup := fixup(connection, &channel, f.Pool, f.SetupAmqp.Execute)
+	opt.AdapterFixup(f.MaxRetrySeconds, func(adp Artifex.IAdapter) error {
+		if err := doFixup(adp); err != nil {
 			return err
 		}
 		if consumerIsClose {
-			adp.Log().Info("retry amqp consumer start")
+			logger := adp.Log()
+
+			logger.Info("retry amqp consumer start")
 			freshConsumer, err := f.NewConsumer(channel)
 			if err != nil {
-				adp.Log().Error("retry amqp consumer fail: %v", err)
+				logger.Error("retry amqp consumer fail: %v", err)
 				return err
 			}
-			adp.Log().Info("retry amqp consumer success")
+			logger.Info("retry amqp consumer success")
 			consumerIsClose = false
 			consumer = freshConsumer
 			return nil
@@ -210,72 +174,5 @@ func (f *SubscriberFactory) CreateSubscriber() (Subscriber, error) {
 	if err != nil {
 		return nil, err
 	}
-	return adp.(Subscriber), err
-}
-
-//
-
-func fixupAmqp(
-	connection **amqp.Connection,
-	channel **amqp.Channel,
-	pool ConnectionPool,
-	setupAmqp SetupAmqp,
-) func(adp Artifex.IAdapter) error {
-
-	connCloseNotify := (*connection).NotifyClose(make(chan *amqp.Error, 1))
-	chCloseNotify := (*channel).NotifyClose(make(chan *amqp.Error, 1))
-	retryCnt := 0
-
-	return func(adp Artifex.IAdapter) error {
-
-		select {
-		case Err := <-connCloseNotify:
-			if Err != nil {
-				adp.Log().Error("amqp connection close: %v", Err)
-				connCloseNotify = nil
-			}
-		case Err := <-chCloseNotify:
-			if Err != nil {
-				adp.Log().Error("amqp channel close: %v", Err)
-				chCloseNotify = nil
-			}
-		default:
-		}
-
-		retryCnt++
-		adp.Log().Info("retry %v times", retryCnt)
-
-		if (*connection).IsClosed() {
-			adp.Log().Info("retry amqp conn start")
-			err := pool.ReConnection(connection)
-			if err != nil {
-				adp.Log().Error("retry amqp conn fail: %v", err)
-				return err
-			}
-			adp.Log().Info("retry amqp conn success")
-			connCloseNotify = (*connection).NotifyClose(make(chan *amqp.Error, 1))
-		}
-
-		if (*channel).IsClosed() {
-			adp.Log().Info("retry amqp channel start")
-			ch, err := (*connection).Channel()
-			if err != nil {
-				adp.Log().Error("retry amqp channel fail: %v", err)
-				return err
-			}
-			(*channel) = ch
-			adp.Log().Info("retry amqp channel success")
-			chCloseNotify = (*channel).NotifyClose(make(chan *amqp.Error, 1))
-		}
-
-		adp.Log().Info("retry setup amqp start")
-		err := setupAmqp(*channel)
-		if err != nil {
-			adp.Log().Error("retry setup amqp fail: %v", err)
-			return err
-		}
-		adp.Log().Info("retry setup amqp success")
-		retryCnt = 0
-		return nil
-	}
+	return adp.(Consumer), nil
 }

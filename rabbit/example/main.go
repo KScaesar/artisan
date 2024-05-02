@@ -17,28 +17,27 @@ func main() {
 	url := "amqp://guest:guest@127.0.0.1:5672"
 	pool := rabbit.NewConnectionPool(url, 2)
 
-	subHub := NewSubscribers(pool)
-
-	pub := NewPublisher(pool)
-	fireMessage(pub)
+	consumers := NewConsumers(pool)
+	producer := NewProducer(pool)
+	fireMessage(producer)
 
 	Artifex.NewShutdown().
-		SetStopAction("amqp_pub", func() error {
-			pub.Stop()
+		StopService("amqp_producer", func() error {
+			producer.Stop()
 			return nil
 		}).
-		SetStopAction("amqp_sub", func() error {
-			subHub.Shutdown()
+		StopService("amqp_consumers", func() error {
+			consumers.Shutdown()
 			return nil
 		}).
-		Listen(nil)
+		Serve(nil)
 }
 
-func NewSubscribers(pool rabbit.ConnectionPool) *Artifex.Hub[Artifex.IAdapter] {
+func NewConsumers(pool rabbit.ConnectionPool) *Artifex.Hub {
 	mux := NewIngressMux()
-	hub := rabbit.NewAdapterHub()
+	hub := Artifex.NewHub()
 
-	subFactories := []*rabbit.SubscriberFactory{
+	consumers := []*rabbit.ConsumerFactory{
 		{
 			Pool: pool,
 			Hub:  hub,
@@ -48,78 +47,50 @@ func NewSubscribers(pool rabbit.ConnectionPool) *Artifex.Hub[Artifex.IAdapter] {
 				SetupTemporaryQueue("test-q1", 10*time.Second),
 				SetupBind("test-q1", "test-ex1", []string{"key1-hello", "key1-world"}),
 			},
-			NewConsumer:     NewConsumer("test-q1", "test-c1", true),
-			ConsumerName:    "test-c1",
-			IngressMux:      mux,
-			DecorateAdapter: DecorateAdapter,
+			NewConsumer:  NewConsumer("test-q1", "test-c1", true),
+			ConsumerName: "test-c1",
+			IngressMux:   mux,
+			Lifecycle:    Lifecycle(),
 		},
 		{
-			Pool: pool,
-			Hub:  hub,
+			Pool:            pool,
+			Hub:             hub,
+			MaxRetrySeconds: 0,
 			SetupAmqp: []rabbit.SetupAmqp{
 				SetupQos(1),
 				SetupExchange("test-ex2", "topic"),
 				SetupQueue("test-q2"),
 				SetupTemporaryBind("test-q2", "test-ex2", []string{"key2.*.Game"}, 10*time.Second),
 			},
-			NewConsumer:     NewConsumer("test-q2", "test-c2", true),
-			ConsumerName:    "test-c2",
-			IngressMux:      mux,
-			DecorateAdapter: DecorateAdapter,
+			NewConsumer:  NewConsumer("test-q2", "test-c2", true),
+			ConsumerName: "test-c2",
+			IngressMux:   mux,
+			Lifecycle:    Lifecycle(),
 		},
 	}
 
-	for _, factory := range subFactories {
-		_, err := factory.CreateSubscriber()
+	for _, factory := range consumers {
+		_, err := factory.CreateConsumer()
 		if err != nil {
 			panic(err)
 		}
 	}
 
 	hub.DoAsync(func(adapter Artifex.IAdapter) {
-		subscriber := adapter.(rabbit.Subscriber)
-		subscriber.Listen()
+		consumer := adapter.(rabbit.Consumer)
+		consumer.Listen()
 	})
 
 	return hub
 }
 
-func NewIngressMux() *rabbit.IngressMux {
-	mux := rabbit.NewIngressMux()
+func NewProducer(pool rabbit.ConnectionPool) rabbit.Producer {
+	mux := NewEgressMux()
 
-	mux.Handler("key1-hello", func(message *rabbit.Ingress, _ *Artifex.RouteParam) error {
-		message.Logger.Info("print key1-hello: %v", string(message.Body))
-		return nil
-	})
-	mux.Handler("key1-world", func(message *rabbit.Ingress, _ *Artifex.RouteParam) error {
-		message.Logger.Info("print key1-world: %v", string(message.Body))
-		return nil
-	})
-
-	mux.Handler("key2.Created.Game", func(message *rabbit.Ingress, _ *Artifex.RouteParam) error {
-		message.Logger.Info("print key2.Created.Game: %v", string(message.Body))
-		return nil
-	})
-	mux.Handler("key2.Restarted.Game", func(message *rabbit.Ingress, _ *Artifex.RouteParam) error {
-		message.Logger.Info("print key2.Restarted.Game: %v", string(message.Body))
-		return nil
-	})
-
-	fmt.Println()
-	for _, v := range mux.Endpoints() {
-		fmt.Printf("[Rabbit Ingress] Subject=%-40q f=%q\n", v[0], v[1])
-	}
-
-	return mux
-}
-
-func NewPublisher(pool rabbit.ConnectionPool) rabbit.Publisher {
-	hub := rabbit.NewAdapterHub()
-
-	pubFactory := &rabbit.PublisherFactory{
+	producerFactory := &rabbit.ProducerFactory{
 		Pool:            pool,
-		Hub:             hub,
 		SendPingSeconds: 20,
+		MaxRetrySeconds: 0,
 		SetupAmqp: []rabbit.SetupAmqp{
 			SetupExchange("test-ex1", "direct"),
 			SetupTemporaryQueue("test-q1", 10*time.Second),
@@ -129,28 +100,64 @@ func NewPublisher(pool rabbit.ConnectionPool) rabbit.Publisher {
 			SetupQueue("test-q2"),
 			SetupTemporaryBind("test-q2", "test-ex2", []string{"key2.*.Game"}, 10*time.Second),
 		},
-		ProducerName:    "example_pub",
-		EgressMux:       NewEgressMux(),
-		DecorateAdapter: DecorateAdapter,
+		ProducerName: "test-p",
+		EgressMux:    mux,
+		Lifecycle:    Lifecycle(),
 	}
 
-	pub, err := pubFactory.CreatePublisher()
+	producer, err := producerFactory.CreateProducer()
 	if err != nil {
 		panic(err)
 	}
 
-	return pub
+	return producer
 }
 
-func NewEgressMux() func(ch **amqp.Channel) *rabbit.EgressMux {
+func NewIngressMux() *rabbit.IngressMux {
+	mux := rabbit.NewIngressMux().
+		EnableMessagePool().
+		ErrorHandler(Artifex.UsePrintResult(nil)).
+		Middleware(
+			Artifex.UseLogger(true, Artifex.SafeConcurrency_Skip),
+			Artifex.UseAdHocFunc(func(message *Artifex.Message, dep any) error {
+				logger := Artifex.CtxGetLogger(message.Ctx, dep)
+				logger.Info("recv %q", message.Subject)
+				return nil
+			}).PreMiddleware(),
+		)
+
+	mux.Handler("key1-hello", Artifex.UsePrintDetail())
+	mux.Handler("key1-world", Artifex.UsePrintDetail())
+	mux.Handler("key2.{action}.Game", Artifex.UsePrintDetail())
+	return mux
+}
+
+func NewEgressMux() *rabbit.EgressMux {
 	ctx := context.Background()
 
-	return func(channel **amqp.Channel) *rabbit.EgressMux {
-		mux := rabbit.NewEgressMux().
-			Middleware(rabbit.EncodeJson().PreMiddleware())
+	mux := rabbit.NewEgressMux().
+		ErrorHandler(func(next Artifex.HandleFunc) Artifex.HandleFunc {
+			return func(message *Artifex.Message, dep any) error {
+				err := next(message, dep)
 
-		key1 := mux.Group("key1-")
-		key1.SetDefaultHandler(func(message *rabbit.Egress, route *Artifex.RouteParam) error {
+				logger := Artifex.CtxGetLogger(message.Ctx, dep)
+
+				if err != nil {
+					logger.Error("send %q fail: %v", message.Subject, err)
+					return err
+				}
+				logger.Info("send %q ok", message.Subject)
+				return nil
+			}
+		}).
+		Middleware(
+			Artifex.UseLogger(true, Artifex.SafeConcurrency_Skip),
+			rabbit.UseEncodeJson(),
+		)
+
+	mux.Group("key1-").
+		DefaultHandler(func(message *Artifex.Message, dep any) error {
+			channel := dep.(rabbit.Producer).RawInfra().(**amqp.Channel)
 			return (*channel).PublishWithContext(
 				ctx,
 				"test-ex1",
@@ -159,52 +166,47 @@ func NewEgressMux() func(ch **amqp.Channel) *rabbit.EgressMux {
 				false,
 				amqp.Publishing{
 					MessageId: message.MsgId(),
-					Body:      message.Body,
+					Body:      message.Bytes,
 				},
 			)
 		})
 
-		mux.Handler("key2.{action}.Game", func(message *rabbit.Egress, route *Artifex.RouteParam) error {
-			return (*channel).PublishWithContext(
-				ctx,
-				"test-ex2",
-				message.Subject,
-				false,
-				false,
-				amqp.Publishing{
-					MessageId: message.MsgId(),
-					Body:      message.Body,
-				},
-			)
-		})
+	mux.Handler("key2.{action}.Game", func(message *Artifex.Message, dep any) error {
+		channel := dep.(rabbit.Producer).RawInfra().(**amqp.Channel)
+		return (*channel).PublishWithContext(
+			ctx,
+			"test-ex2",
+			message.Subject,
+			false,
+			false,
+			amqp.Publishing{
+				MessageId: message.MsgId(),
+				Body:      message.Bytes,
+			},
+		)
+	})
 
-		fmt.Println()
-		for _, v := range mux.Endpoints() {
-			fmt.Printf("[Rabbit Egress] Subject=%-40q f=%q\n", v[0], v[1])
-		}
-
-		return mux
-	}
+	return mux
 }
 
-func fireMessage(pub rabbit.Publisher) {
-	messages := []*rabbit.Egress{
-		rabbit.NewEgress("key1-hello", map[string]any{
+func fireMessage(producer rabbit.Producer) {
+	messages := []*Artifex.Message{
+		rabbit.NewBodyEgressWithRoutingKey("key1-hello", map[string]any{
 			"detail":      "hello everyone!",
 			"sender":      "Fluffy Bunny",
 			"description": "This is a friendly greeting message.",
 		}),
-		rabbit.NewEgress("key1-world", map[string]any{
+		rabbit.NewBodyEgressWithRoutingKey("key1-world", map[string]any{
 			"detail":      "Beautiful World",
 			"sender":      "Sneaky Cat",
 			"description": "This is another cheerful greeting.",
 		}),
-		rabbit.NewEgress("key2.Created.Game", map[string]any{
+		rabbit.NewBodyEgressWithRoutingKey("key2.Created.Game", map[string]any{
 			"detail":      "A new game has been created!",
 			"creator":     "GameMaster123",
 			"description": "This message indicates the creation of a new game.",
 		}),
-		rabbit.NewEgress("key2.Restarted.Game", map[string]any{
+		rabbit.NewBodyEgressWithRoutingKey("key2.Restarted.Game", map[string]any{
 			"detail":      "Game restarted successfully.",
 			"admin":       "AdminPlayer",
 			"description": "The game has been restarted by the admin.",
@@ -214,21 +216,32 @@ func fireMessage(pub rabbit.Publisher) {
 	for i := range messages {
 		i := i
 		go func() {
-			err := pub.Send(messages[i])
+			err := producer.Send(messages[i])
 			if err != nil {
-				fmt.Println("pub send fail:", err)
+				fmt.Println("producer send fail:", err)
 			}
 		}()
 	}
 }
 
-func DecorateAdapter(adp Artifex.IAdapter) Artifex.IAdapter {
-	amqpId := Artifex.GenerateRandomCode(6)
-	amqpName := adp.Identifier()
+func Lifecycle() func(lifecycle *Artifex.Lifecycle) {
+	return func(lifecycle *Artifex.Lifecycle) {
 
-	logger := adp.Log().
-		WithKeyValue("amqp_id", amqpId).
-		WithKeyValue("amqp_name", amqpName)
-	adp.SetLog(logger)
-	return adp
+		lifecycle.OnConnect(func(adp Artifex.IAdapter) error {
+			amqpId := Artifex.GenerateRandomCode(6)
+			amqpName := adp.Identifier()
+
+			logger := adp.Log().
+				WithKeyValue("amqp_id", amqpId).
+				WithKeyValue("amqp_name", amqpName)
+
+			logger.Info("  >> connect <<")
+			adp.SetLog(logger)
+			return nil
+		})
+
+		lifecycle.OnDisconnect(func(adp Artifex.IAdapter) {
+			adp.Log().Info("  >> disconnect <<")
+		})
+	}
 }

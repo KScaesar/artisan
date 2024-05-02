@@ -38,6 +38,8 @@ github.com/KScaesar/Artifex v0.37.4 h1:hfAxoMaDLdflDlFPuzZZXryMTdavGim0X5QTBLDlj
 github.com/KScaesar/Artifex v0.37.4/go.mod h1:8iDOVeDtJQkelQzbLhNThKHbUDc4xAQ2KZjyEtu8GE8=
 github.com/KScaesar/Artifex v0.37.5 h1:zh6AgMNstLvpC4PXBugMpx/tX0ZL1IGEDlvRbMwxwE8=
 github.com/KScaesar/Artifex v0.37.5/go.mod h1:8iDOVeDtJQkelQzbLhNThKHbUDc4xAQ2KZjyEtu8GE8=
+github.com/KScaesar/Artifex v0.46.0 h1:7hdoAGTBrX93mfZOggUSUXPrk6pVl6yJXB9+G73rh48=
+github.com/KScaesar/Artifex v0.46.0/go.mod h1:honAN7K8WvOT4ZZkBK38XedqG66LyMijgDs0im1pWTo=
 github.com/cenkalti/backoff/v4 v4.3.0 h1:MyRJ/UdXutAwSAT+s3wNd7MfTIcy71VQueUuFK343L8=
 github.com/cenkalti/backoff/v4 v4.3.0/go.mod h1:Y3VNntkOUPxTVeUxJ/G5vcM//AlwfmyYozVcomhLiZE=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
