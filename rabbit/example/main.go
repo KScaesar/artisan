@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -116,8 +115,9 @@ func NewProducer(pool rabbit.ConnectionPool) rabbit.Producer {
 func NewIngressMux() *rabbit.IngressMux {
 	mux := rabbit.NewIngressMux().
 		EnableMessagePool().
-		ErrorHandler(Artifex.UsePrintResult(nil)).
+		ErrorHandler(Artifex.UsePrintResult(false, nil)).
 		Middleware(
+			Artifex.UseRecover(),
 			Artifex.UseLogger(true, Artifex.SafeConcurrency_Skip),
 			Artifex.UseAdHocFunc(func(message *Artifex.Message, dep any) error {
 				logger := Artifex.CtxGetLogger(message.Ctx, dep)
@@ -133,24 +133,10 @@ func NewIngressMux() *rabbit.IngressMux {
 }
 
 func NewEgressMux() *rabbit.EgressMux {
-	ctx := context.Background()
-
 	mux := rabbit.NewEgressMux().
-		ErrorHandler(func(next Artifex.HandleFunc) Artifex.HandleFunc {
-			return func(message *Artifex.Message, dep any) error {
-				err := next(message, dep)
-
-				logger := Artifex.CtxGetLogger(message.Ctx, dep)
-
-				if err != nil {
-					logger.Error("send %q fail: %v", message.Subject, err)
-					return err
-				}
-				logger.Info("send %q ok", message.Subject)
-				return nil
-			}
-		}).
+		ErrorHandler(Artifex.UsePrintResult(true, nil)).
 		Middleware(
+			Artifex.UseRecover(),
 			Artifex.UseLogger(true, Artifex.SafeConcurrency_Skip),
 			rabbit.UseEncodeJson(),
 		)
@@ -159,7 +145,7 @@ func NewEgressMux() *rabbit.EgressMux {
 		DefaultHandler(func(message *Artifex.Message, dep any) error {
 			channel := dep.(rabbit.Producer).RawInfra().(**amqp.Channel)
 			return (*channel).PublishWithContext(
-				ctx,
+				message.Ctx,
 				"test-ex1",
 				message.Subject,
 				false,
@@ -174,7 +160,7 @@ func NewEgressMux() *rabbit.EgressMux {
 	mux.Handler("key2.{action}.Game", func(message *Artifex.Message, dep any) error {
 		channel := dep.(rabbit.Producer).RawInfra().(**amqp.Channel)
 		return (*channel).PublishWithContext(
-			ctx,
+			message.Ctx,
 			"test-ex2",
 			message.Subject,
 			false,
