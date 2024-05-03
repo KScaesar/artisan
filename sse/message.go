@@ -1,69 +1,27 @@
 package sse
 
 import (
-	"context"
-
-	"github.com/gookit/goutil/maputil"
-
-	"github.com/KScaesar/Artifex"
+	"github.com/KScaesar/art"
 )
 
-type Event = string
+func NewBytesEgress(bMessage []byte) *art.Message {
+	message := art.GetMessage()
 
-//
-
-func NewEgress(event Event, message any) *Egress {
-	return &Egress{
-		Subject:  event,
-		Metadata: make(maputil.Data),
-		AppMsg:   message,
-	}
+	message.Bytes = bMessage
+	return message
 }
 
-type Egress struct {
-	msgId string
-	Body  []byte
+func NewBodyEgress(body any) *art.Message {
+	message := art.GetMessage()
 
-	Subject  string
-	Metadata maputil.Data
-	AppMsg   any
-
-	ctx context.Context
+	message.Body = body
+	return message
 }
 
-func (e *Egress) MsgId() string {
-	if e.msgId == "" {
-		e.msgId = Artifex.GenerateUlid()
-	}
-	return e.msgId
-}
+func NewBodyEgressWithEvent(event string, body any) *art.Message {
+	message := art.GetMessage()
 
-func (e *Egress) SetMsgId(msgId string) {
-	e.msgId = msgId
-}
-
-func (e *Egress) Context() context.Context {
-	if e.ctx == nil {
-		e.ctx = context.Background()
-	}
-	return e.ctx
-}
-
-func (e *Egress) SetContext(ctx context.Context) {
-	e.ctx = ctx
-}
-
-type EgressHandleFunc = Artifex.HandleFunc[Egress]
-type EgressMiddleware = Artifex.Middleware[Egress]
-type EgressMux = Artifex.Mux[Egress]
-
-func NewEgressMux() *EgressMux {
-	getEvent := func(message *Egress) string {
-		return message.Subject
-	}
-	mux := Artifex.NewMux("/", getEvent)
-
-	middleware := Artifex.MW[Egress]{}
-	mux.Middleware(middleware.Recover())
-	return mux
+	message.Subject = event
+	message.Body = body
+	return message
 }

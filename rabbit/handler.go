@@ -3,25 +3,25 @@ package rabbit
 import (
 	"encoding/json"
 
-	"github.com/KScaesar/Artifex"
+	"github.com/KScaesar/art"
 )
 
-type IngressMux = Artifex.Mux
-type EgressMux = Artifex.Mux
+type IngressMux = art.Mux
+type EgressMux = art.Mux
 
 func NewIngressMux() *IngressMux {
-	in := Artifex.NewMux(".")
+	in := art.NewMux(".")
 	return in
 }
 
 func NewEgressMux() *EgressMux {
-	out := Artifex.NewMux(".")
+	out := art.NewMux(".")
 	return out
 }
 
-func UseEncodeJson() Artifex.Middleware {
-	return func(next Artifex.HandleFunc) Artifex.HandleFunc {
-		return func(message *Artifex.Message, dep any) error {
+func UseEncodeJson() art.Middleware {
+	return func(next art.HandleFunc) art.HandleFunc {
+		return func(message *art.Message, dep any) error {
 			if message.Body == nil {
 				message.Body = struct{}{}
 			}

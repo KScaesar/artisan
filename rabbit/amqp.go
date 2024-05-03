@@ -1,7 +1,7 @@
 package rabbit
 
 import (
-	"github.com/KScaesar/Artifex"
+	"github.com/KScaesar/art"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -24,13 +24,13 @@ func fixup(
 	channel **amqp.Channel,
 	pool ConnectionPool,
 	setupAmqp SetupAmqp,
-) func(adp Artifex.IAdapter) error {
+) func(adp art.IAdapter) error {
 
 	connCloseNotify := (*connection).NotifyClose(make(chan *amqp.Error, 1))
 	chCloseNotify := (*channel).NotifyClose(make(chan *amqp.Error, 1))
 	retry := 0
 
-	return func(adp Artifex.IAdapter) error {
+	return func(adp art.IAdapter) error {
 		logger := adp.Log()
 
 		select {

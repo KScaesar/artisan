@@ -1,7 +1,7 @@
-# Artifex-Adapter
+# art-Adapter
 
-Provide examples of implementing Artifex's adapters
-- [Artifex-Adapter](#artifex-adapter)
+Provide examples of implementing art's adapters
+- [art-Adapter](#art-adapter)
 	- [sse](#sse)
 	- [rabbitmq](#rabbitmq)
 
@@ -40,22 +40,22 @@ func NewMux(hub *sse.Hub) *sse.EgressMux {
 	v1.Handler("ChangedRoomMap/{room_id}", ChangedRoomMap(hub))
 
 	fmt.Println()
-	// [Artifex-SSE] event="v0/.*"                                  f="main.broadcast.func1"
-	// [Artifex-SSE] event="v0/Notification"                        f="main.Notification.func1"
-	// [Artifex-SSE] event="v1/ChangedRoomMap/{room_id}"            f="main.ChangedRoomMap.func1"
-	// [Artifex-SSE] event="v1/PausedGame"                          f="main.PausedGame.func1"
-	root.PrintEndpoints(func(subject, fn string) { fmt.Printf("[Artifex-SSE] event=%-40q f=%q\n", subject, fn) })
+	// [art-SSE] event="v0/.*"                                  f="main.broadcast.func1"
+	// [art-SSE] event="v0/Notification"                        f="main.Notification.func1"
+	// [art-SSE] event="v1/ChangedRoomMap/{room_id}"            f="main.ChangedRoomMap.func1"
+	// [art-SSE] event="v1/PausedGame"                          f="main.PausedGame.func1"
+	root.PrintEndpoints(func(subject, fn string) { fmt.Printf("[art-SSE] event=%-40q f=%q\n", subject, fn) })
 
 	return mux
 }
 
-func Lifecycle(hub *sse.Hub) func(w http.ResponseWriter, r *http.Request, lifecycle *Artifex.Lifecycle) {
-	return func(w http.ResponseWriter, r *http.Request, lifecycle *Artifex.Lifecycle) {
+func Lifecycle(hub *sse.Hub) func(w http.ResponseWriter, r *http.Request, lifecycle *art.Lifecycle) {
+	return func(w http.ResponseWriter, r *http.Request, lifecycle *art.Lifecycle) {
 		gameId := r.URL.Query().Get("game_id")
 		roomId := r.URL.Query().Get("room_id")
 
 		once := sync.Once{}
-		lifecycle.OnOpen(func(adp Artifex.IAdapter) error {
+		lifecycle.OnOpen(func(adp art.IAdapter) error {
 			sess := adp.(*Session)
 			sess.Init(gameId, roomId)
 
@@ -68,14 +68,14 @@ func Lifecycle(hub *sse.Hub) func(w http.ResponseWriter, r *http.Request, lifecy
 			return nil
 		})
 
-		lifecycle.OnStop(func(adp Artifex.IAdapter) {
+		lifecycle.OnStop(func(adp art.IAdapter) {
 			sess := adp.(*Session)
 			sess.Logger().Info("leave: total=%v\n", hub.Local.Total())
 		})
 	}
 }
 
-func NewHttpServer(sseServer *sse.Server, shutdown *Artifex.Shutdown) *http.Server {
+func NewHttpServer(sseServer *sse.Server, shutdown *art.Shutdown) *http.Server {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.Default()
 
@@ -90,7 +90,7 @@ func NewHttpServer(sseServer *sse.Server, shutdown *Artifex.Shutdown) *http.Serv
 	go func() {
 		err := httpServer.ListenAndServe()
 		if err != nil {
-			Artifex.DefaultLogger().Error("http server fail: %v", err)
+			art.DefaultLogger().Error("http server fail: %v", err)
 		}
 	}()
 
@@ -113,20 +113,20 @@ sse gif:
 func NewIngressMux() func() *rabbit.IngressMux {
 	mux := rabbit.NewIngressMux()
 
-	mux.Handler("key1-hello", func(message *rabbit.Ingress, _ *Artifex.RouteParam) error {
+	mux.Handler("key1-hello", func(message *rabbit.Ingress, _ *art.RouteParam) error {
 		message.Logger.Info("print key1-hello: %v", string(message.ByteBody))
 		return nil
 	})
-	mux.Handler("key1-world", func(message *rabbit.Ingress, _ *Artifex.RouteParam) error {
+	mux.Handler("key1-world", func(message *rabbit.Ingress, _ *art.RouteParam) error {
 		message.Logger.Info("print key1-world: %v", string(message.ByteBody))
 		return nil
 	})
 
-	mux.Handler("key2.Created.Game", func(message *rabbit.Ingress, _ *Artifex.RouteParam) error {
+	mux.Handler("key2.Created.Game", func(message *rabbit.Ingress, _ *art.RouteParam) error {
 		message.Logger.Info("print key2.Created.Game: %v", string(message.ByteBody))
 		return nil
 	})
-	mux.Handler("key2.Restarted.Game", func(message *rabbit.Ingress, _ *Artifex.RouteParam) error {
+	mux.Handler("key2.Restarted.Game", func(message *rabbit.Ingress, _ *art.RouteParam) error {
 		message.Logger.Info("print key2.Restarted.Game: %v", string(message.ByteBody))
 		return nil
 	})
@@ -151,7 +151,7 @@ func NewEgressMux() func(ch **amqp.Channel) *rabbit.EgressMux {
 			Middleware(rabbit.EncodeJson().PreMiddleware())
 
 		key1 := mux.Group("key1-")
-		key1.SetDefaultHandler(func(message *rabbit.Egress, route *Artifex.RouteParam) error {
+		key1.SetDefaultHandler(func(message *rabbit.Egress, route *art.RouteParam) error {
 			return (*channel).PublishWithContext(
 				ctx,
 				"test-ex1",
@@ -165,7 +165,7 @@ func NewEgressMux() func(ch **amqp.Channel) *rabbit.EgressMux {
 			)
 		})
 
-		mux.Handler("key2.{action}.Game", func(message *rabbit.Egress, route *Artifex.RouteParam) error {
+		mux.Handler("key2.{action}.Game", func(message *rabbit.Egress, route *art.RouteParam) error {
 			return (*channel).PublishWithContext(
 				ctx,
 				"test-ex2",

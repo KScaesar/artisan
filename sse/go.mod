@@ -9,6 +9,7 @@ require (
 )
 
 require (
+	github.com/KScaesar/art v0.47.0 // indirect
 	github.com/bytedance/sonic v1.11.3 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/chenzhuoyu/base64x v0.0.0-20230717121745-296ad89f973d // indirect

@@ -4,14 +4,14 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/KScaesar/Artifex"
+	"github.com/KScaesar/art"
 	amqp "github.com/rabbitmq/amqp091-go"
 
-	"github.com/KScaesar/Artifex-Adapter/rabbit"
+	"github.com/KScaesar/artisan/rabbit"
 )
 
 func main() {
-	Artifex.SetDefaultLogger(Artifex.NewLogger(false, Artifex.LogLevelDebug))
+	art.SetDefaultLogger(art.NewLogger(false, art.LogLevelDebug))
 
 	url := "amqp://guest:guest@127.0.0.1:5672"
 	pool := rabbit.NewConnectionPool(url, 2)
@@ -20,7 +20,7 @@ func main() {
 	producer := NewProducer(pool)
 	fireMessage(producer)
 
-	Artifex.NewShutdown().
+	art.NewShutdown().
 		StopService("amqp_producer", func() error {
 			producer.Stop()
 			return nil
@@ -32,9 +32,9 @@ func main() {
 		Serve(nil)
 }
 
-func NewConsumers(pool rabbit.ConnectionPool) *Artifex.Hub {
+func NewConsumers(pool rabbit.ConnectionPool) *art.Hub {
 	mux := NewIngressMux()
-	hub := Artifex.NewHub()
+	hub := art.NewHub()
 
 	consumers := []*rabbit.ConsumerFactory{
 		{
@@ -75,7 +75,7 @@ func NewConsumers(pool rabbit.ConnectionPool) *Artifex.Hub {
 		}
 	}
 
-	hub.DoAsync(func(adapter Artifex.IAdapter) {
+	hub.DoAsync(func(adapter art.IAdapter) {
 		consumer := adapter.(rabbit.Consumer)
 		consumer.Listen()
 	})
@@ -115,34 +115,34 @@ func NewProducer(pool rabbit.ConnectionPool) rabbit.Producer {
 func NewIngressMux() *rabbit.IngressMux {
 	mux := rabbit.NewIngressMux().
 		EnableMessagePool().
-		ErrorHandler(Artifex.UsePrintResult(false, nil)).
+		ErrorHandler(art.UsePrintResult(false, nil)).
 		Middleware(
-			Artifex.UseRecover(),
-			Artifex.UseLogger(true, Artifex.SafeConcurrency_Skip),
-			Artifex.UseAdHocFunc(func(message *Artifex.Message, dep any) error {
-				logger := Artifex.CtxGetLogger(message.Ctx, dep)
+			art.UseRecover(),
+			art.UseLogger(true, art.SafeConcurrency_Skip),
+			art.UseAdHocFunc(func(message *art.Message, dep any) error {
+				logger := art.CtxGetLogger(message.Ctx, dep)
 				logger.Info("recv %q", message.Subject)
 				return nil
 			}).PreMiddleware(),
 		)
 
-	mux.Handler("key1-hello", Artifex.UsePrintDetail())
-	mux.Handler("key1-world", Artifex.UsePrintDetail())
-	mux.Handler("key2.{action}.Game", Artifex.UsePrintDetail())
+	mux.Handler("key1-hello", art.UsePrintDetail())
+	mux.Handler("key1-world", art.UsePrintDetail())
+	mux.Handler("key2.{action}.Game", art.UsePrintDetail())
 	return mux
 }
 
 func NewEgressMux() *rabbit.EgressMux {
 	mux := rabbit.NewEgressMux().
-		ErrorHandler(Artifex.UsePrintResult(true, nil)).
+		ErrorHandler(art.UsePrintResult(true, nil)).
 		Middleware(
-			Artifex.UseRecover(),
-			Artifex.UseLogger(true, Artifex.SafeConcurrency_Skip),
+			art.UseRecover(),
+			art.UseLogger(true, art.SafeConcurrency_Skip),
 			rabbit.UseEncodeJson(),
 		)
 
 	mux.Group("key1-").
-		DefaultHandler(func(message *Artifex.Message, dep any) error {
+		DefaultHandler(func(message *art.Message, dep any) error {
 			channel := dep.(rabbit.Producer).RawInfra().(**amqp.Channel)
 			return (*channel).PublishWithContext(
 				message.Ctx,
@@ -157,7 +157,7 @@ func NewEgressMux() *rabbit.EgressMux {
 			)
 		})
 
-	mux.Handler("key2.{action}.Game", func(message *Artifex.Message, dep any) error {
+	mux.Handler("key2.{action}.Game", func(message *art.Message, dep any) error {
 		channel := dep.(rabbit.Producer).RawInfra().(**amqp.Channel)
 		return (*channel).PublishWithContext(
 			message.Ctx,
@@ -176,7 +176,7 @@ func NewEgressMux() *rabbit.EgressMux {
 }
 
 func fireMessage(producer rabbit.Producer) {
-	messages := []*Artifex.Message{
+	messages := []*art.Message{
 		rabbit.NewBodyEgressWithRoutingKey("key1-hello", map[string]any{
 			"detail":      "hello everyone!",
 			"sender":      "Fluffy Bunny",
@@ -210,11 +210,11 @@ func fireMessage(producer rabbit.Producer) {
 	}
 }
 
-func Lifecycle() func(lifecycle *Artifex.Lifecycle) {
-	return func(lifecycle *Artifex.Lifecycle) {
+func Lifecycle() func(lifecycle *art.Lifecycle) {
+	return func(lifecycle *art.Lifecycle) {
 
-		lifecycle.OnConnect(func(adp Artifex.IAdapter) error {
-			amqpId := Artifex.GenerateRandomCode(6)
+		lifecycle.OnConnect(func(adp art.IAdapter) error {
+			amqpId := art.GenerateRandomCode(6)
 			amqpName := adp.Identifier()
 
 			logger := adp.Log().
@@ -226,7 +226,7 @@ func Lifecycle() func(lifecycle *Artifex.Lifecycle) {
 			return nil
 		})
 
-		lifecycle.OnDisconnect(func(adp Artifex.IAdapter) {
+		lifecycle.OnDisconnect(func(adp art.IAdapter) {
 			adp.Log().Info("  >> disconnect <<")
 		})
 	}

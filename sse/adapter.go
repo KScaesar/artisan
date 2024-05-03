@@ -4,206 +4,108 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/KScaesar/Artifex"
-	"github.com/gin-contrib/sse"
+	"github.com/KScaesar/art"
 	"github.com/gin-gonic/gin"
 )
 
-//
-
-type MultiPublisher interface {
-	Send(messages ...*Egress) error
-	Shutdown()
-	StopPublisher(filter func(Publisher) bool)
-}
-
-type Publisher interface {
-	Artifex.IAdapter
-	Send(messages ...*Egress) error
-}
+type Producer = art.Producer
 
 //
 
-type RemoteHub interface {
-	FindByKey(sseId string) (pub Publisher, found bool)
-	RemoveByKey(sseId string)
-	Shutdown()
-}
-
-func NewHub() *Hub {
-	stop := func(publisher Artifex.IAdapter) {
-		publisher.Stop()
-	}
-	return &Hub{
-		Local: Artifex.NewAdapterHub(stop),
-	}
-}
-
-type Hub struct {
-	Remote RemoteHub
-	Local  *Artifex.Hub[Artifex.IAdapter]
-}
-
-func (hub *Hub) Join(sseId string, pub Artifex.IAdapter) error {
-	if hub.Remote == nil {
-		return hub.Local.Join(sseId, pub)
-	}
-
-	_, found := hub.Remote.FindByKey(sseId)
-	if found {
-		hub.Remote.RemoveByKey(sseId)
-	}
-	return hub.Local.Join(sseId, pub)
-}
-
-func (hub *Hub) RemoveOne(filter func(Artifex.IAdapter) bool) {
-	hub.Local.RemoveOne(filter)
-}
-
-//
-
-func DefaultServer() *Server {
-	hub := NewHub()
+func NewArtisan() *Artisan {
+	hub := art.NewHub()
 	mux := NewEgressMux()
 
-	mux.SetDefaultHandler(Broadcast(hub))
-
-	return &Server{
+	return &Artisan{
 		Hub:             hub,
 		SendPingSeconds: 15,
-		StopMessage:     NewEgress("Disconnect", struct{}{}),
-		PingMessage:     NewEgress("Ping", struct{}{}),
+		StopMessage:     NewBodyEgressWithEvent("Disconnect", struct{}{}),
+		PingMessage:     NewBodyEgressWithEvent("Ping", struct{}{}),
 
-		Authenticate: func(w http.ResponseWriter, r *http.Request) (sseId string, err error) {
-			return Artifex.GenerateRandomCode(6), nil
+		Authenticate: func(w http.ResponseWriter, r *http.Request) (name string, err error) {
+			return art.GenerateRandomCode(8), nil
 		},
 		EgressMux: mux,
 	}
 }
 
-type Server struct {
-	Hub             *Hub
-	Logger          Artifex.Logger
+type Artisan struct {
+	Hub             *art.Hub
+	Logger          art.Logger
 	SendPingSeconds int
-	PingMessage     *Egress
-	StopMessage     *Egress
+	PingMessage     *art.Message
+	StopMessage     *art.Message
 
-	Authenticate    func(w http.ResponseWriter, r *http.Request) (sseId string, err error)
+	Authenticate func(w http.ResponseWriter, r *http.Request) (name string, err error)
+
 	EgressMux       *EgressMux
-	DecorateAdapter func(old Artifex.IAdapter) (fresh Artifex.IAdapter)
-	Lifecycle       func(w http.ResponseWriter, r *http.Request, lifecycle *Artifex.Lifecycle)
+	DecorateAdapter func(adapter art.IAdapter) (application art.IAdapter)
+	Lifecycle       func(w http.ResponseWriter, r *http.Request, lifecycle *art.Lifecycle)
 }
 
-func (f *Server) ServeByGin(c *gin.Context) {
-	pub, err := f.createPublisherByGin(c)
+func (f *Artisan) Serve(c *gin.Context) {
+	producer, err := f.CreateProducer(c)
 	if err != nil {
 		return
 	}
+
 	c.Writer.Flush()
-	<-c.Request.Context().Done()
-	f.Hub.RemoveOne(func(adapter Artifex.IAdapter) bool { return adapter == pub })
+
+	select {
+	case <-c.Request.Context().Done():
+		f.Hub.RemoveOne(func(adapter art.IAdapter) bool { return adapter == producer })
+
+	case <-producer.WaitStop():
+
+	}
 }
 
-func (f *Server) createPublisherByGin(c *gin.Context) (Publisher, error) {
-	sseId, err := f.Authenticate(c.Writer, c.Request)
+func (f *Artisan) CreateProducer(c *gin.Context) (producer Producer, err error) {
+	name, err := f.Authenticate(c.Writer, c.Request)
 	if err != nil {
 		return nil, err
 	}
 
-	var mu sync.Mutex
-	disconnect := c.Request.Context().Done()
-
-	opt := Artifex.NewPublisherOption[Egress]().
-		Identifier(sseId).
+	opt := art.NewAdapterOption().
+		RawInfra(nil).
+		Identifier(name).
 		AdapterHub(f.Hub).
 		Logger(f.Logger).
+		EgressMux(f.EgressMux).
 		DecorateAdapter(f.DecorateAdapter).
-		Lifecycle(func(life *Artifex.Lifecycle) {
+		Lifecycle(func(life *art.Lifecycle) {
 			f.Lifecycle(c.Writer, c.Request, life)
-		}).
-		AdapterSend(func(adp Artifex.IAdapter, message *Egress) error {
-			select {
-			case <-disconnect:
-			default:
-				mu.Lock()
-				defer mu.Unlock()
-				c.Render(-1, sse.Event{
-					Event: message.Subject,
-					Id:    message.MsgId(),
-					Data:  message.AppMsg,
-				})
-				adp.Log().WithKeyValue("msg_id", message.MsgId()).Info("send %q", message.Subject)
-				c.Writer.Flush()
-			}
-			return nil
-		}).
-		AdapterStop(func(adp Artifex.IAdapter) error {
-			if f.StopMessage == nil {
-				return nil
-			}
-
-			select {
-			case <-disconnect:
-			default:
-				mu.Lock()
-				defer mu.Unlock()
-				message := f.StopMessage
-				c.Render(-1, sse.Event{
-					Event: message.Subject,
-					Data:  message.AppMsg,
-				})
-				adp.Log().Info("sse stop")
-				c.Writer.Flush()
-			}
-			return nil
 		})
 
-	if f.SendPingSeconds > 0 {
-		waitPong := make(chan error, 1)
-		opt.SendPing(func() error {
-			select {
-			case <-disconnect:
-			default:
-				mu.Lock()
-				defer mu.Unlock()
-				message := f.PingMessage
-				c.Render(-1, sse.Event{
-					Event: message.Subject,
-					Data:  message.AppMsg,
-				})
-				c.Writer.Flush()
-			}
-			waitPong <- nil
-			return nil
-		}, waitPong, f.SendPingSeconds*2)
-	}
+	var mu sync.Mutex
 
-	pub, err := opt.Build()
-	if err != nil {
-		return nil, err
+	// send ping, wait pong
+	sendPing := func(adp art.IAdapter) error {
+		return nil
 	}
-	return pub.(Publisher), nil
-}
+	waitPong := art.NewWaitPingPong()
+	opt.SendPing(f.SendPingSeconds, waitPong, sendPing)
 
-func (f *Server) Send(messages ...*Egress) error {
-	for _, message := range messages {
-		err := f.EgressMux.HandleMessage(message, nil)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (f *Server) Shutdown() {
-	if f.Hub.Remote != nil {
-		f.Hub.Remote.Shutdown()
-	}
-	f.Hub.Local.Shutdown()
-}
-
-func (f *Server) StopPublisher(filter func(Publisher) bool) {
-	f.Hub.Local.RemoveMulti(func(adapter Artifex.IAdapter) bool {
-		return filter(adapter.(Publisher))
+	opt.AdapterSend(func(logger art.Logger, message *art.Message) (err error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return
 	})
+
+	opt.AdapterStop(func(logger art.Logger) (err error) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		if err != nil {
+			logger.Error("stop: %v", err)
+			return
+		}
+		return nil
+	})
+
+	adp, err := opt.Build()
+	if err != nil {
+		return
+	}
+	return adp.(Producer), err
 }

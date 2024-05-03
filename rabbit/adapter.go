@@ -3,19 +3,19 @@ package rabbit
 import (
 	"errors"
 
-	"github.com/KScaesar/Artifex"
+	"github.com/KScaesar/art"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-type Producer = Artifex.Producer
-type Consumer = Artifex.Consumer
+type Producer = art.Producer
+type Consumer = art.Consumer
 
 //
 
 type ProducerFactory struct {
 	Pool            ConnectionPool
-	Hub             *Artifex.Hub
-	Logger          Artifex.Logger
+	Hub             *art.Hub
+	Logger          art.Logger
 	SendPingSeconds int
 	MaxRetrySeconds int
 
@@ -23,8 +23,8 @@ type ProducerFactory struct {
 	ProducerName string
 
 	EgressMux       *EgressMux
-	DecorateAdapter func(adapter Artifex.IAdapter) (application Artifex.IAdapter)
-	Lifecycle       func(lifecycle *Artifex.Lifecycle)
+	DecorateAdapter func(adapter art.IAdapter) (application art.IAdapter)
+	Lifecycle       func(lifecycle *art.Lifecycle)
 }
 
 func (f *ProducerFactory) CreateProducer() (producer Producer, err error) {
@@ -43,7 +43,7 @@ func (f *ProducerFactory) CreateProducer() (producer Producer, err error) {
 		return nil, err
 	}
 
-	opt := Artifex.NewAdapterOption().
+	opt := art.NewAdapterOption().
 		RawInfra(&channel).
 		Identifier(f.ProducerName).
 		AdapterHub(f.Hub).
@@ -52,8 +52,8 @@ func (f *ProducerFactory) CreateProducer() (producer Producer, err error) {
 		DecorateAdapter(f.DecorateAdapter).
 		Lifecycle(f.Lifecycle)
 
-	waitPong := Artifex.NewWaitPingPong()
-	sendPing := func(adp Artifex.IAdapter) error {
+	waitPong := art.NewWaitPingPong()
+	sendPing := func(adp art.IAdapter) error {
 		defer waitPong.Ack()
 		if channel.IsClosed() {
 			return errors.New("amqp publisher is closed")
@@ -62,7 +62,7 @@ func (f *ProducerFactory) CreateProducer() (producer Producer, err error) {
 	}
 	opt.SendPing(f.SendPingSeconds, waitPong, sendPing)
 
-	opt.AdapterStop(func(logger Artifex.Logger) (err error) {
+	opt.AdapterStop(func(logger art.Logger) (err error) {
 		err = channel.Close()
 		if err != nil {
 			logger.Error("stop: %v", err)
@@ -72,7 +72,7 @@ func (f *ProducerFactory) CreateProducer() (producer Producer, err error) {
 	})
 
 	doFixup := fixup(connection, &channel, f.Pool, f.SetupAmqp.Execute)
-	opt.AdapterFixup(f.MaxRetrySeconds, func(adp Artifex.IAdapter) error {
+	opt.AdapterFixup(f.MaxRetrySeconds, func(adp art.IAdapter) error {
 		return doFixup(adp)
 	})
 
@@ -85,8 +85,8 @@ func (f *ProducerFactory) CreateProducer() (producer Producer, err error) {
 
 type ConsumerFactory struct {
 	Pool            ConnectionPool
-	Hub             *Artifex.Hub
-	Logger          Artifex.Logger
+	Hub             *art.Hub
+	Logger          art.Logger
 	MaxRetrySeconds int
 
 	SetupAmqp    SetupAmqpAll
@@ -94,8 +94,8 @@ type ConsumerFactory struct {
 	ConsumerName string
 
 	IngressMux      *IngressMux
-	DecorateAdapter func(adapter Artifex.IAdapter) (application Artifex.IAdapter)
-	Lifecycle       func(lifecycle *Artifex.Lifecycle)
+	DecorateAdapter func(adapter art.IAdapter) (application art.IAdapter)
+	Lifecycle       func(lifecycle *art.Lifecycle)
 }
 
 func (f *ConsumerFactory) CreateConsumer() (Consumer, error) {
@@ -119,7 +119,7 @@ func (f *ConsumerFactory) CreateConsumer() (Consumer, error) {
 		return nil, err
 	}
 
-	opt := Artifex.NewAdapterOption().
+	opt := art.NewAdapterOption().
 		Identifier(f.ConsumerName).
 		AdapterHub(f.Hub).
 		Logger(f.Logger).
@@ -128,7 +128,7 @@ func (f *ConsumerFactory) CreateConsumer() (Consumer, error) {
 		Lifecycle(f.Lifecycle)
 
 	consumerIsClose := false
-	opt.AdapterRecv(func(logger Artifex.Logger) (*Artifex.Message, error) {
+	opt.AdapterRecv(func(logger art.Logger) (*art.Message, error) {
 		amqpMsg, ok := <-consumer
 		if !ok {
 			consumerIsClose = true
@@ -139,7 +139,7 @@ func (f *ConsumerFactory) CreateConsumer() (Consumer, error) {
 		return NewIngress(&amqpMsg), nil
 	})
 
-	opt.AdapterStop(func(logger Artifex.Logger) (err error) {
+	opt.AdapterStop(func(logger art.Logger) (err error) {
 		err = channel.Close()
 		if err != nil {
 			logger.Error("stop: %v", err)
@@ -149,7 +149,7 @@ func (f *ConsumerFactory) CreateConsumer() (Consumer, error) {
 	})
 
 	doFixup := fixup(connection, &channel, f.Pool, f.SetupAmqp.Execute)
-	opt.AdapterFixup(f.MaxRetrySeconds, func(adp Artifex.IAdapter) error {
+	opt.AdapterFixup(f.MaxRetrySeconds, func(adp art.IAdapter) error {
 		if err := doFixup(adp); err != nil {
 			return err
 		}
