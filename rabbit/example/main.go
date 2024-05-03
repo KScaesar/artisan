@@ -115,7 +115,7 @@ func NewProducer(pool rabbit.ConnectionPool) rabbit.Producer {
 func NewIngressMux() *rabbit.IngressMux {
 	mux := rabbit.NewIngressMux().
 		EnableMessagePool().
-		ErrorHandler(art.UsePrintResult(false, nil)).
+		ErrorHandler(art.UsePrintResult{}.PrintIngress().PostMiddleware()).
 		Middleware(
 			art.UseRecover(),
 			art.UseLogger(true, art.SafeConcurrency_Skip),
@@ -134,7 +134,7 @@ func NewIngressMux() *rabbit.IngressMux {
 
 func NewEgressMux() *rabbit.EgressMux {
 	mux := rabbit.NewEgressMux().
-		ErrorHandler(art.UsePrintResult(true, nil)).
+		ErrorHandler(art.UsePrintResult{}.PrintEgress().PostMiddleware()).
 		Middleware(
 			art.UseRecover(),
 			art.UseLogger(true, art.SafeConcurrency_Skip),

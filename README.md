@@ -9,80 +9,17 @@ Provide examples of implementing art's adapters
 
 [sse example](./sse/example/main.go)
 
-
 ```go
 package main
 
-func NewSseServer() *sse.Server {
-	sseServer := sse.DefaultServer()
-	sseServer.Authenticate = Authenticate
-	sseServer.EgressMux = NewMux(sseServer.Hub)
-	sseServer.Lifecycle = Lifecycle(sseServer.Hub)
-	sseServer.DecorateAdapter = DecorateAdapter
-	return sseServer
-}
-
-func Authenticate(w http.ResponseWriter, r *http.Request) (sseId string, err error) {
-	userId := r.URL.Query().Get("user_id")
-	return userId, nil
-}
-
-func NewMux(hub *sse.Hub) *sse.EgressMux {
-	mux := sse.NewEgressMux()
-	root := mux.Transform(transform)
-
-	v0 := root.Group("v0/")
-	v0.SetDefaultHandler(broadcast(hub))
-	v0.Handler("Notification", Notification(hub))
-
-	v1 := root.Group("v1/")
-	v1.Handler("PausedGame", PausedGame(hub))
-	v1.Handler("ChangedRoomMap/{room_id}", ChangedRoomMap(hub))
-
-	fmt.Println()
-	// [art-SSE] event="v0/.*"                                  f="main.broadcast.func1"
-	// [art-SSE] event="v0/Notification"                        f="main.Notification.func1"
-	// [art-SSE] event="v1/ChangedRoomMap/{room_id}"            f="main.ChangedRoomMap.func1"
-	// [art-SSE] event="v1/PausedGame"                          f="main.PausedGame.func1"
-	root.PrintEndpoints(func(subject, fn string) { fmt.Printf("[art-SSE] event=%-40q f=%q\n", subject, fn) })
-
-	return mux
-}
-
-func Lifecycle(hub *sse.Hub) func(w http.ResponseWriter, r *http.Request, lifecycle *art.Lifecycle) {
-	return func(w http.ResponseWriter, r *http.Request, lifecycle *art.Lifecycle) {
-		gameId := r.URL.Query().Get("game_id")
-		roomId := r.URL.Query().Get("room_id")
-
-		once := sync.Once{}
-		lifecycle.OnOpen(func(adp art.IAdapter) error {
-			sess := adp.(*Session)
-			sess.Init(gameId, roomId)
-
-			sess.Logger().Info("enter: total=%v\n", hub.Local.Total())
-			if hub.Local.Total() == 4 {
-				once.Do(func() {
-					close(mqFire)
-				})
-			}
-			return nil
-		})
-
-		lifecycle.OnStop(func(adp art.IAdapter) {
-			sess := adp.(*Session)
-			sess.Logger().Info("leave: total=%v\n", hub.Local.Total())
-		})
-	}
-}
-
-func NewHttpServer(sseServer *sse.Server, shutdown *art.Shutdown) *http.Server {
+func NewHttpServer(sseServer sse.Server, shutdown *art.Shutdown) *http.Server {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.Default()
 
 	router.StaticFile("/", "./index.html")
-	router.GET("/stream", sse.HeadersByGin(true), sseServer.ServeByGin)
+	router.GET("/stream", sse.UseHeadersByGin(true), sseServer.Serve)
 	router.GET("/shutdown", func(c *gin.Context) {
-		shutdown.NotifyStop(nil)
+		shutdown.Notify(nil)
 		c.String(200, "")
 	})
 
@@ -96,13 +33,65 @@ func NewHttpServer(sseServer *sse.Server, shutdown *art.Shutdown) *http.Server {
 
 	return httpServer
 }
+
+// Producer
+func NewMux() *sse.EgressMux {
+	mux := sse.NewEgressMux().
+		Transform(Transform).
+		ErrorHandler(
+			art.UsePrintResult{}.PrintEgress().IgnoreErrors(art.ErrNotFound).PostMiddleware(),
+		).
+		Middleware(
+			art.UseAdHocFunc(func(message *art.Message, dep any) error {
+				message.Mutex.Lock()
+				logger := dep.(*Session).Logger().WithKeyValue("msg_id", message.MsgId())
+				message.UpdateContext(func(ctx context.Context) context.Context {
+					return art.CtxWithLogger(ctx, dep, logger)
+				})
+				message.Mutex.Unlock()
+				return nil
+			}).PreMiddleware(),
+			art.UseRecover(),
+			art.UsePrintDetail().PostMiddleware(),
+		)
+
+	mux.DefaultHandler(art.UseGenericFunc(Broadcast))
+
+	v0 := mux.Group("v0/")
+	v0.Handler("Notification", art.UseGenericFunc(Notification))
+
+	v1 := mux.Group("v1/")
+	v1.Handler("PausedGame", art.UseGenericFunc(PausedGame))
+	v1.Handler("ChangedRoomMap", art.UseGenericFunc(ChangedRoomMap))
+
+	return mux
+}
+
+func Broadcast(message *art.Message, sess *Session) error {
+	return sess.RawSend(message)
+}
+
+func Notification(message *art.Message, sess *Session) error {
+	if !message.Metadata.Get("user_ids").(map[string]bool)[sess.UserId] {
+		return art.ErrNotFound
+	}
+	return sess.RawSend(message)
+}
+
+func PausedGame(message *art.Message, sess *Session) error {
+	if sess.GameId != message.Metadata.Str("game_id") {
+		return art.ErrNotFound
+	}
+	return sess.RawSend(message)
+}
+
+func ChangedRoomMap(message *art.Message, sess *Session) error {
+	if sess.RoomId != message.Metadata.Int("room_id") {
+		return art.ErrNotFound
+	}
+	return sess.RawSend(message)
+}
 ```
-
-sse result:  
-![sse result](./asset/sse.png)
-
-sse gif:  
-![sse gif](./asset/sse.gif)
 
 ## rabbitmq
 
@@ -110,81 +99,68 @@ sse gif:
 
 
 ```go
-func NewIngressMux() func() *rabbit.IngressMux {
-	mux := rabbit.NewIngressMux()
+// Consumer
+func NewIngressMux() *rabbit.IngressMux {
+	mux := rabbit.NewIngressMux().
+		EnableMessagePool().
+		ErrorHandler(art.UsePrintResult{}.PrintIngress().PostMiddleware()).
+		Middleware(
+			art.UseRecover(),
+			art.UseLogger(true, art.SafeConcurrency_Skip),
+			art.UseAdHocFunc(func(message *art.Message, dep any) error {
+				logger := art.CtxGetLogger(message.Ctx, dep)
+				logger.Info("recv %q", message.Subject)
+				return nil
+			}).PreMiddleware(),
+		)
 
-	mux.Handler("key1-hello", func(message *rabbit.Ingress, _ *art.RouteParam) error {
-		message.Logger.Info("print key1-hello: %v", string(message.ByteBody))
-		return nil
-	})
-	mux.Handler("key1-world", func(message *rabbit.Ingress, _ *art.RouteParam) error {
-		message.Logger.Info("print key1-world: %v", string(message.ByteBody))
-		return nil
-	})
-
-	mux.Handler("key2.Created.Game", func(message *rabbit.Ingress, _ *art.RouteParam) error {
-		message.Logger.Info("print key2.Created.Game: %v", string(message.ByteBody))
-		return nil
-	})
-	mux.Handler("key2.Restarted.Game", func(message *rabbit.Ingress, _ *art.RouteParam) error {
-		message.Logger.Info("print key2.Restarted.Game: %v", string(message.ByteBody))
-		return nil
-	})
-
-	fmt.Println()
-	for _, v := range mux.Endpoints() {
-		fmt.Printf("[Rabbit Ingress] RoutingKey=%-40q f=%q\n", v[0], v[1])
-	}
-
-	return func() *rabbit.IngressMux {
-		return mux
-	}
+	mux.Handler("key1-hello", art.UsePrintDetail())
+	mux.Handler("key1-world", art.UsePrintDetail())
+	mux.Handler("key2.{action}.Game", art.UsePrintDetail())
+	return mux
 }
-```
 
-```go
-func NewEgressMux() func(ch **amqp.Channel) *rabbit.EgressMux {
-	ctx := context.Background()
+// Producer
+func NewEgressMux() *rabbit.EgressMux {
+	mux := rabbit.NewEgressMux().
+		ErrorHandler(art.UsePrintResult{}.PrintEgress().PostMiddleware()).
+		Middleware(
+			art.UseRecover(),
+			art.UseLogger(true, art.SafeConcurrency_Skip),
+			rabbit.UseEncodeJson(),
+		)
 
-	return func(channel **amqp.Channel) *rabbit.EgressMux {
-		mux := rabbit.NewEgressMux().
-			Middleware(rabbit.EncodeJson().PreMiddleware())
-
-		key1 := mux.Group("key1-")
-		key1.SetDefaultHandler(func(message *rabbit.Egress, route *art.RouteParam) error {
+	mux.Group("key1-").
+		DefaultHandler(func(message *art.Message, dep any) error {
+			channel := dep.(rabbit.Producer).RawInfra().(**amqp.Channel)
 			return (*channel).PublishWithContext(
-				ctx,
+				message.Ctx,
 				"test-ex1",
 				message.Subject,
 				false,
 				false,
 				amqp.Publishing{
 					MessageId: message.MsgId(),
-					Body:      message.Body,
+					Body:      message.Bytes,
 				},
 			)
 		})
 
-		mux.Handler("key2.{action}.Game", func(message *rabbit.Egress, route *art.RouteParam) error {
-			return (*channel).PublishWithContext(
-				ctx,
-				"test-ex2",
-				message.Subject,
-				false,
-				false,
-				amqp.Publishing{
-					MessageId: message.MsgId(),
-					Body:      message.Body,
-				},
-			)
-		})
+	mux.Handler("key2.{action}.Game", func(message *art.Message, dep any) error {
+		channel := dep.(rabbit.Producer).RawInfra().(**amqp.Channel)
+		return (*channel).PublishWithContext(
+			message.Ctx,
+			"test-ex2",
+			message.Subject,
+			false,
+			false,
+			amqp.Publishing{
+				MessageId: message.MsgId(),
+				Body:      message.Bytes,
+			},
+		)
+	})
 
-		fmt.Println()
-		for _, v := range mux.Endpoints() {
-			fmt.Printf("[Rabbit Egress] Subject=%-40q f=%q\n", v[0], v[1])
-		}
-
-		return mux
-	}
+	return mux
 }
 ```

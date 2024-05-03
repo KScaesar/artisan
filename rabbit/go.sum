@@ -1,5 +1,7 @@
 github.com/KScaesar/art v0.47.0 h1:eZKmu/pwtapPcyC8RiadH/rscInD4RGfDRytemG+MBU=
 github.com/KScaesar/art v0.47.0/go.mod h1:ZOVUF0xI2crg1Pn68BV1O5SZmWBn7aL8U/Z5elfvIqA=
+github.com/KScaesar/art v0.49.1 h1:3EdGx05+BC692nowSzXOQeqXcY4RkU6YNSWAjOqGEMM=
+github.com/KScaesar/art v0.49.1/go.mod h1:ZOVUF0xI2crg1Pn68BV1O5SZmWBn7aL8U/Z5elfvIqA=
 github.com/cenkalti/backoff/v4 v4.3.0 h1:MyRJ/UdXutAwSAT+s3wNd7MfTIcy71VQueUuFK343L8=
 github.com/cenkalti/backoff/v4 v4.3.0/go.mod h1:Y3VNntkOUPxTVeUxJ/G5vcM//AlwfmyYozVcomhLiZE=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=

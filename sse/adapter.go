@@ -9,10 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type Producer interface {
-	art.IAdapter
-	RawSend(messages ...*art.Message) error
-}
+type Producer = art.Producer
 
 type Server interface {
 	Serve(c *gin.Context)
@@ -27,11 +24,8 @@ func NewArtisan() *Artisan {
 	mux := NewEgressMux()
 
 	mux.DefaultHandler(func(message *art.Message, dep any) error {
-		hub := dep.(*art.Hub)
-		hub.DoAsync(func(adapter art.IAdapter) {
-			adapter.(Producer).RawSend(message)
-		})
-		return nil
+		producer := dep.(Producer)
+		return producer.RawSend(message)
 	})
 
 	return &Artisan{
@@ -62,10 +56,10 @@ type Artisan struct {
 }
 
 func (f *Artisan) Broadcast(messages ...*art.Message) {
-	for _, message := range messages {
-		egress := message
-		f.EgressMux.HandleMessage(egress, f.Hub)
-	}
+	f.Hub.DoAsync(func(adp art.IAdapter) {
+		producer := adp.(Producer)
+		producer.Send(messages...)
+	})
 }
 
 func (f *Artisan) DisconnectClient(filter func(producer Producer) bool) {
@@ -104,6 +98,7 @@ func (f *Artisan) CreateProducer(c *gin.Context) (producer Producer, err error) 
 		Identifier(name).
 		AdapterHub(f.Hub).
 		Logger(f.Logger).
+		EgressMux(f.EgressMux).
 		DecorateAdapter(f.DecorateAdapter).
 		Lifecycle(func(life *art.Lifecycle) {
 			f.Lifecycle(c.Writer, c.Request, life)

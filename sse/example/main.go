@@ -2,8 +2,9 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -22,15 +23,16 @@ func main() {
 	shutdown := art.NewShutdown()
 	httpServer := NewHttpServer(sseServer, shutdown)
 
+	ctx := context.Background()
 	shutdown.
-		SetStopAction("sse", func() error {
+		StopService("sse", func() error {
 			sseServer.Shutdown()
 			return nil
 		}).
-		SetStopAction("http", func() error {
-			return httpServer.Shutdown(context.Background())
+		StopService("http", func() error {
+			return httpServer.Shutdown(ctx)
 		}).
-		Listen(nil)
+		Serve(ctx)
 }
 
 var mqFire = make(chan string)
@@ -39,32 +41,48 @@ var mqFire = make(chan string)
 
 func NewSseServer() sse.Server {
 	sseServer := sse.NewArtisan()
+
 	sseServer.Authenticate = func(w http.ResponseWriter, r *http.Request) (name string, err error) {
 		userId := r.URL.Query().Get("user_id")
 		return userId, nil
 	}
-	RegisterMux(sseServer.EgressMux)
+
+	sseServer.EgressMux = NewMux()
+
 	sseServer.Lifecycle = Lifecycle(sseServer.Hub)
+
 	sseServer.DecorateAdapter = NewSession
 	return sseServer
 }
 
-func RegisterMux(mux *sse.EgressMux) *sse.EgressMux {
+func NewMux() *sse.EgressMux {
+	mux := sse.NewEgressMux().
+		Transform(Transform).
+		ErrorHandler(
+			art.UsePrintResult{}.PrintEgress().IgnoreErrors(art.ErrNotFound).PostMiddleware(),
+		).
+		Middleware(
+			art.UseAdHocFunc(func(message *art.Message, dep any) error {
+				message.Mutex.Lock()
+				logger := dep.(*Session).Logger().WithKeyValue("msg_id", message.MsgId())
+				message.UpdateContext(func(ctx context.Context) context.Context {
+					return art.CtxWithLogger(ctx, dep, logger)
+				})
+				message.Mutex.Unlock()
+				return nil
+			}).PreMiddleware(),
+			art.UseRecover(),
+			art.UsePrintDetail().PostMiddleware(),
+		)
+
+	mux.DefaultHandler(art.UseGenericFunc(Broadcast))
+
 	v0 := mux.Group("v0/")
-	v0.Handler("Notification", Notification())
+	v0.Handler("Notification", art.UseGenericFunc(Notification))
 
 	v1 := mux.Group("v1/")
-	v1.Handler("PausedGame", PausedGame())
-	v1.Handler("ChangedRoomMap", ChangedRoomMap())
-
-	// [art-SSE] event=".*"                                  f="main.broadcast.func1"
-	// [art-SSE] event="v0/Notification"                        f="main.Notification.func1"
-	// [art-SSE] event="v1/ChangedRoomMap"            f="main.ChangedRoomMap.func1"
-	// [art-SSE] event="v1/PausedGame"                          f="main.PausedGame.func1"
-	mux.Endpoints(func(subject, handler string) {
-		fmt.Printf("[art-SSE] event=%-40q f=%q\n", subject, handler)
-	})
-	fmt.Println()
+	v1.Handler("PausedGame", art.UseGenericFunc(PausedGame))
+	v1.Handler("ChangedRoomMap", art.UseGenericFunc(ChangedRoomMap))
 
 	return mux
 }
@@ -91,185 +109,122 @@ func NewHttpServer(sseServer sse.Server, shutdown *art.Shutdown) *http.Server {
 	return httpServer
 }
 
-func broadcast() art.HandleFunc {
-	return func(message *art.Message, dep any) error {
-		// broadcast by onMessage:
-
-		// The browser onMessage handler assumes the event name is 'message'
-		// https://stackoverflow.com/a/42803814/9288569
-		event := message.Subject
-		message.Subject = "message"
-		msgId := message.MsgId()
-
-		hub.Local.DoAsync(func(adp art.IAdapter) {
-			sess := adp.(*Session)
-			sess.Logger().WithKeyValue("msg_id", msgId).Info("send broadcast %v\n", event)
-			sess.Send(message)
-		})
-		return nil
-	}
-}
-
 // handler
 
-func Notification() art.HandleFunc {
-	return func(message *art.Message, dep any) error {}
-	// Notification by addEventListener:
-	// version from metadata
-	// user_id from metadata
-
-	user_ids := message.Metadata.StringsByStr("user_id")
-	msgId := message.MsgId()
-
-	adapters, found := hub.Local.FindMultiByKey(user_ids)
-	if !found {
-		return fmt.Errorf("not found: user_id=%v", user_ids)
+func Transform(message *art.Message, dep any) error {
+	if !message.Metadata.Has("version") {
+		return nil
 	}
 
-	for _, adp := range adapters {
-		sess := adp.(*Session)
-		sess.Logger().WithKeyValue("msg_id", msgId).Info("send %v\n", message.Subject)
-		go sess.Send(message)
+	message.Mutex.Lock()
+	defer message.Mutex.Unlock()
+
+	if message.Metadata.Has("version") {
+		message.Subject = message.Metadata.Str("version") + message.Subject
+		delete(message.Metadata, "version")
 	}
 	return nil
 }
+
+func Broadcast(message *art.Message, sess *Session) error {
+	return sess.RawSend(message)
 }
 
-func PausedGame() art.HandleFunc {
-	return func(message *art.Message, dep any) error {}
-	// PausedGame by onMessage:
-	// version from subject
-	// game_id from metadata
-
-	// The browser onMessage handler assumes the event name is 'message'
-	// https://stackoverflow.com/a/42803814/9288569
-	event := message.Subject
-	message.Subject = "message"
-	gameId := message.Metadata.Str("game_id")
-	msgId := message.MsgId()
-
-	hub.Local.DoSync(func(adp art.IAdapter) bool {
-		sess := adp.(*Session)
-
-		if sess.GameId != gameId {
-			return false
-		}
-
-		sess.Logger().WithKeyValue("msg_id", msgId).Info("send %v\n", event)
-		sess.Send(message)
-		return false
-	})
-
-	message.Subject = event
-
-	return nil
-}
+func Notification(message *art.Message, sess *Session) error {
+	if !message.Metadata.Get("user_ids").(map[string]bool)[sess.UserId] {
+		return art.ErrNotFound
+	}
+	return sess.RawSend(message)
 }
 
-func ChangedRoomMap() art.HandleFunc {
-	return func(message *art.Message, dep any) error {}
-	// ChangedRoomMap by addEventListener:
-	// version from metadata
-	// room_id from route param
-
-	// Note: In DoAsync function will get empty data because 'RouteParam' has been reset
-	roomId := route.Str("room_id")
-
-	// In order to remove 'RouteParam', original Subject = "v1/ChangedRoomMap/{room_id}"
-	event := message.Subject
-	message.Subject = "v1/ChangedRoomMap"
-	msgId := message.MsgId()
-
-	hub.Local.DoAsync(func(adp art.IAdapter) {
-		sess := adp.(*Session)
-		if sess.RoomId != roomId {
-			return
-		}
-
-		sess.Logger().WithKeyValue("msg_id", msgId).Info("send %v:\n", event)
-		sess.Send(message)
-	})
-
-	return nil
+func PausedGame(message *art.Message, sess *Session) error {
+	if sess.GameId != message.Metadata.Str("game_id") {
+		return art.ErrNotFound
+	}
+	return sess.RawSend(message)
 }
+
+func ChangedRoomMap(message *art.Message, sess *Session) error {
+	if sess.RoomId != message.Metadata.Int("room_id") {
+		return art.ErrNotFound
+	}
+	return sess.RawSend(message)
 }
 
 func fireMessage(sseServer sse.Server) {
 	<-mqFire
 
 	messages := []func() *art.Message{
-		// broadcast by onMessage:
 		func() *art.Message {
-			return sse.NewBodyEgress( map[string]any{
-				"event": "v0/CreatedGcpVm",
-				"team":  "devops",
-				"disk":  "2T",
-			})
-		},
-
-		// broadcast by onMessage:
-		func() *art.Message {
-			return sse.NewEgress("v0/Hello", "v0/Hello: World")
-		},
-
-		// Notification by addEventListener:
-		// version from metadata
-		// user_id from metadata
-		func() *art.Message {
-			egress := sse.NewEgress("Notification", "Gcp VM closed")
-			egress.Metadata.Set("version", "v0/")
-			egress.Metadata.Set("user_id", "1,3,5,7,9")
+			egress := sse.NewBodyEgress(`Hello World`)
+			egress.MsgId()
 			return egress
 		},
-
-		// PausedGame by onMessage:
-		// version from subject
-		// game_id from metadata
 		func() *art.Message {
-			egress := sse.NewEgress("v1/PausedGame", map[string]any{"x_game_id": "1", "event": "v1/PausedGame"})
+			egress := sse.NewBodyEgress(json.RawMessage(`{"disk":"2T","event":"CreatedGcpVm","team":"devops"}`))
+			egress.MsgId()
+			return egress
+		},
+		func() *art.Message {
+			egress := sse.NewBodyEgress([]byte(`Domain Driven Design`))
+			egress.MsgId()
+			return egress
+		},
+		func() *art.Message {
+			egress := sse.NewBodyEgressWithEvent("Notification", "Gcp VM closed")
+			egress.MsgId()
+			egress.Metadata.Set("version", "v0/")
+			egress.Metadata.Set("user_ids", map[string]bool{"1": true, "3": true, "5": true, "7": true, "9": true})
+			return egress
+		},
+		func() *art.Message {
+			egress := sse.NewBodyEgressWithEvent("v1/PausedGame", map[string]any{"x_game_id": "1", "event": "v1/PausedGame"})
+			egress.MsgId()
 			egress.Metadata.Set("game_id", "1")
 			return egress
 		},
 		func() *art.Message {
-			egress := sse.NewEgress("v1/PausedGame", map[string]any{"x_game_id": "2", "event": "v1/PausedGame"})
+			egress := sse.NewBodyEgressWithEvent("v1/PausedGame", map[string]any{"x_game_id": "2", "event": "v1/PausedGame"})
+			egress.MsgId()
 			egress.Metadata.Set("game_id", "2")
 			return egress
 		},
 		func() *art.Message {
-			egress := sse.NewEgress("v1/PausedGame", map[string]any{"x_game_id": "3", "event": "v1/PausedGame"})
+			egress := sse.NewBodyEgressWithEvent("v1/PausedGame", map[string]any{"x_game_id": "3", "event": "v1/PausedGame"})
+			egress.MsgId()
 			egress.Metadata.Set("game_id", "3")
 			return egress
 		},
-
-		// ChangedRoomMap by addEventListener:
-		// version from metadata
-		// room_id from route param
 		func() *art.Message {
-			egress := sse.NewEgress("ChangedRoomMap/1", map[string]any{"y_room_id": "1", "z_map_id": "a"})
+			egress := sse.NewBodyEgressWithEvent("ChangedRoomMap", map[string]any{"y_room_id": 1, "z_map_id": "a"})
+			egress.MsgId()
 			egress.Metadata.Set("version", "v1/")
+			egress.Metadata.Set("room_id", 1)
 			return egress
 		},
 		func() *art.Message {
-			egress := sse.NewEgress("ChangedRoomMap/2", map[string]any{"y_room_id": "2", "z_map_id": "b"})
+			egress := sse.NewBodyEgressWithEvent("ChangedRoomMap", map[string]any{"y_room_id": 2, "z_map_id": "b"})
 			egress.Metadata.Set("version", "v1/")
+			egress.Metadata.Set("room_id", 2)
 			return egress
 		},
 		func() *art.Message {
-			egress := sse.NewEgress("ChangedRoomMap/3", map[string]any{"y_room_id": "3", "z_map_id": "c"})
+			egress := sse.NewBodyEgressWithEvent("ChangedRoomMap", map[string]any{"y_room_id": 3, "z_map_id": "c"})
 			egress.Metadata.Set("version", "v1/")
+			egress.Metadata.Set("room_id", 3)
 			return egress
 		},
 	}
 
 	for _, message := range messages {
 		time.Sleep(1 * time.Second)
-		sseServer.Send(message())
+		sseServer.Broadcast(message())
 	}
 
-	art.DefaultLogger().Info("fireMessage finish !!!")
 	time.Sleep(time.Second)
+	art.DefaultLogger().Info("fireMessage finish !!!")
 
-	sseServer.StopPublisher(func(pub sse.Publisher) bool {
+	sseServer.DisconnectClient(func(pub sse.Producer) bool {
 		return true
 	})
 }
@@ -293,7 +248,7 @@ func Lifecycle(hub *art.Hub) func(w http.ResponseWriter, r *http.Request, lifecy
 				WithKeyValue("user_id", userId)
 			adp.SetLog(logger)
 
-			sess.Init(gameId, roomId)
+			sess.Init(sessId, userId, gameId, roomId)
 
 			sess.Logger().Info("  connect: total=%v\n", hub.Total())
 			if hub.Total() == 4 {
@@ -321,7 +276,7 @@ type Session struct {
 	SessId string
 	UserId string
 	GameId string
-	RoomId string
+	RoomId int
 
 	sse.Producer
 }
@@ -332,7 +287,11 @@ func (sess *Session) Logger() art.Logger {
 		WithKeyValue("room_id", sess.RoomId)
 }
 
-func (sess *Session) Init(gameId string, roomId string) {
+func (sess *Session) Init(sessId, userId, gameId, roomId string) {
+	sess.SessId = sessId
+	sess.UserId = userId
 	sess.GameId = gameId
-	sess.RoomId = roomId
+
+	v, _ := strconv.Atoi(roomId)
+	sess.RoomId = v
 }

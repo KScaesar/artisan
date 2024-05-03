@@ -24,14 +24,16 @@
   };
 
   stream.onmessage = function (event) {
+    // const data = JSON.parse(event.data);
+    // console.log("onMessage",data)
     $('.event-data').append("onMessage: " + event.data + "</br>")
   };
 
-  // stream.addEventListener("v0/CreatedGcpVm", function (event) {
-  //   $('.event-data').append("addEventListener: "+event.type + ": " + event.data + "</br>")
-  // });
-
   stream.addEventListener("v0/Notification", function (event) {
+    $('.event-data').append("addEventListener: "+event.type + ": " + event.data + "</br>")
+  });
+
+  stream.addEventListener("v1/PausedGame", function (event) {
     $('.event-data').append("addEventListener: "+event.type + ": " + event.data + "</br>")
   });
 
