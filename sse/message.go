@@ -4,13 +4,6 @@ import (
 	"github.com/KScaesar/art"
 )
 
-func NewBytesEgress(bMessage []byte) *art.Message {
-	message := art.GetMessage()
-
-	message.Bytes = bMessage
-	return message
-}
-
 func NewBodyEgress(body any) *art.Message {
 	message := art.GetMessage()
 

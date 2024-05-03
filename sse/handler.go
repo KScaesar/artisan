@@ -5,8 +5,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type HandleFunc func(message *art.Message, hub *art.Hub) error
-
 type EgressMux = art.Mux
 
 func NewEgressMux() *EgressMux {
