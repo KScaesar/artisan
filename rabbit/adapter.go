@@ -72,9 +72,7 @@ func (f *ProducerFactory) CreateProducer() (producer Producer, err error) {
 	})
 
 	doFixup := fixup(connection, &channel, f.Pool, f.SetupAmqp.Execute)
-	opt.RawFixup(f.MaxRetrySeconds, func(adp art.IAdapter) error {
-		return doFixup(adp)
-	})
+	opt.RawFixup(f.MaxRetrySeconds, doFixup)
 
 	adp, err := opt.Build()
 	if err != nil {
