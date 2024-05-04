@@ -3,7 +3,7 @@ module github.com/KScaesar/artisan/sse
 go 1.18
 
 require (
-	github.com/KScaesar/art v0.49.1
+	github.com/KScaesar/art v0.50.0
 	github.com/gin-contrib/sse v0.1.0
 	github.com/gin-gonic/gin v1.9.1
 )

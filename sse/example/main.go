@@ -58,19 +58,9 @@ func NewSseServer() sse.Server {
 func NewMux() *sse.EgressMux {
 	mux := sse.NewEgressMux().
 		Transform(Transform).
-		ErrorHandler(
-			art.UsePrintResult{}.PrintEgress().IgnoreErrors(art.ErrNotFound).PostMiddleware(),
-		).
 		Middleware(
-			art.UseAdHocFunc(func(message *art.Message, dep any) error {
-				message.Mutex.Lock()
-				logger := dep.(*Session).Logger().WithKeyValue("msg_id", message.MsgId())
-				message.UpdateContext(func(ctx context.Context) context.Context {
-					return art.CtxWithLogger(ctx, dep, logger)
-				})
-				message.Mutex.Unlock()
-				return nil
-			}).PreMiddleware(),
+			art.UseLogger(true, art.SafeConcurrency_Copy),
+			art.UsePrintResult{}.PrintEgress().IgnoreErrors(sse.ErrBroadcastNotMatch).PostMiddleware(),
 			art.UseRecover(),
 			art.UsePrintDetail().PostMiddleware(),
 		)
@@ -132,21 +122,21 @@ func Broadcast(message *art.Message, sess *Session) error {
 
 func Notification(message *art.Message, sess *Session) error {
 	if !message.Metadata.Get("user_ids").(map[string]bool)[sess.UserId] {
-		return art.ErrNotFound
+		return sse.ErrBroadcastNotMatch
 	}
 	return sess.RawSend(message)
 }
 
 func PausedGame(message *art.Message, sess *Session) error {
 	if sess.GameId != message.Metadata.Str("game_id") {
-		return art.ErrNotFound
+		return sse.ErrBroadcastNotMatch
 	}
 	return sess.RawSend(message)
 }
 
 func ChangedRoomMap(message *art.Message, sess *Session) error {
 	if sess.RoomId != message.Metadata.Int("room_id") {
-		return art.ErrNotFound
+		return sse.ErrBroadcastNotMatch
 	}
 	return sess.RawSend(message)
 }
@@ -204,12 +194,14 @@ func fireMessage(sseServer sse.Server) {
 		},
 		func() *art.Message {
 			egress := sse.NewBodyEgressWithEvent("ChangedRoomMap", map[string]any{"y_room_id": 2, "z_map_id": "b"})
+			egress.MsgId()
 			egress.Metadata.Set("version", "v1/")
 			egress.Metadata.Set("room_id", 2)
 			return egress
 		},
 		func() *art.Message {
 			egress := sse.NewBodyEgressWithEvent("ChangedRoomMap", map[string]any{"y_room_id": 3, "z_map_id": "c"})
+			egress.MsgId()
 			egress.Metadata.Set("version", "v1/")
 			egress.Metadata.Set("room_id", 3)
 			return egress
@@ -242,15 +234,14 @@ func Lifecycle(hub *art.Hub) func(w http.ResponseWriter, r *http.Request, lifecy
 
 			sessId := art.GenerateRandomCode(6)
 			userId := adp.Identifier()
-
-			logger := sess.Log().
-				WithKeyValue("sess_id", sessId).
-				WithKeyValue("user_id", userId)
-			adp.SetLog(logger)
-
 			sess.Init(sessId, userId, gameId, roomId)
 
-			sess.Logger().Info("  connect: total=%v\n", hub.Total())
+			adp.SetLog(sess.Producer.Log().
+				WithKeyValue("sess_id", sessId).
+				WithKeyValue("user_id", userId),
+			)
+
+			sess.Log().Info("  connect: total=%v\n", hub.Total())
 			if hub.Total() == 4 {
 				once.Do(func() {
 					close(mqFire)
@@ -261,7 +252,7 @@ func Lifecycle(hub *art.Hub) func(w http.ResponseWriter, r *http.Request, lifecy
 
 		lifecycle.OnDisconnect(func(adp art.IAdapter) {
 			sess := adp.(*Session)
-			sess.Logger().Info("  disconnect: total=%v\n", hub.Total())
+			sess.Log().Info("  disconnect: total=%v\n", hub.Total())
 		})
 	}
 }
@@ -281,8 +272,8 @@ type Session struct {
 	sse.Producer
 }
 
-func (sess *Session) Logger() art.Logger {
-	return sess.Log().
+func (sess *Session) Log() art.Logger {
+	return sess.Producer.Log().
 		WithKeyValue("game_id", sess.GameId).
 		WithKeyValue("room_id", sess.RoomId)
 }

@@ -14,7 +14,7 @@ type Consumer = art.Consumer
 
 type ProducerFactory struct {
 	Pool            ConnectionPool
-	Hub             *art.Hub
+	Hub             art.AdapterHub
 	Logger          art.Logger
 	SendPingSeconds int
 	MaxRetrySeconds int
@@ -62,7 +62,7 @@ func (f *ProducerFactory) CreateProducer() (producer Producer, err error) {
 	}
 	opt.SendPing(f.SendPingSeconds, waitPong, sendPing)
 
-	opt.AdapterStop(func(logger art.Logger) (err error) {
+	opt.RawStop(func(logger art.Logger) (err error) {
 		err = channel.Close()
 		if err != nil {
 			logger.Error("stop: %v", err)
@@ -72,7 +72,7 @@ func (f *ProducerFactory) CreateProducer() (producer Producer, err error) {
 	})
 
 	doFixup := fixup(connection, &channel, f.Pool, f.SetupAmqp.Execute)
-	opt.AdapterFixup(f.MaxRetrySeconds, func(adp art.IAdapter) error {
+	opt.RawFixup(f.MaxRetrySeconds, func(adp art.IAdapter) error {
 		return doFixup(adp)
 	})
 
@@ -85,7 +85,7 @@ func (f *ProducerFactory) CreateProducer() (producer Producer, err error) {
 
 type ConsumerFactory struct {
 	Pool            ConnectionPool
-	Hub             *art.Hub
+	Hub             art.AdapterHub
 	Logger          art.Logger
 	MaxRetrySeconds int
 
@@ -128,7 +128,7 @@ func (f *ConsumerFactory) CreateConsumer() (Consumer, error) {
 		Lifecycle(f.Lifecycle)
 
 	consumerIsClose := false
-	opt.AdapterRecv(func(logger art.Logger) (*art.Message, error) {
+	opt.RawRecv(func(logger art.Logger) (*art.Message, error) {
 		amqpMsg, ok := <-consumer
 		if !ok {
 			consumerIsClose = true
@@ -139,7 +139,7 @@ func (f *ConsumerFactory) CreateConsumer() (Consumer, error) {
 		return NewIngress(&amqpMsg), nil
 	})
 
-	opt.AdapterStop(func(logger art.Logger) (err error) {
+	opt.RawStop(func(logger art.Logger) (err error) {
 		err = channel.Close()
 		if err != nil {
 			logger.Error("stop: %v", err)
@@ -149,7 +149,7 @@ func (f *ConsumerFactory) CreateConsumer() (Consumer, error) {
 	})
 
 	doFixup := fixup(connection, &channel, f.Pool, f.SetupAmqp.Execute)
-	opt.AdapterFixup(f.MaxRetrySeconds, func(adp art.IAdapter) error {
+	opt.RawFixup(f.MaxRetrySeconds, func(adp art.IAdapter) error {
 		if err := doFixup(adp); err != nil {
 			return err
 		}

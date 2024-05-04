@@ -38,19 +38,9 @@ func NewHttpServer(sseServer sse.Server, shutdown *art.Shutdown) *http.Server {
 func NewMux() *sse.EgressMux {
 	mux := sse.NewEgressMux().
 		Transform(Transform).
-		ErrorHandler(
-			art.UsePrintResult{}.PrintEgress().IgnoreErrors(art.ErrNotFound).PostMiddleware(),
-		).
 		Middleware(
-			art.UseAdHocFunc(func(message *art.Message, dep any) error {
-				message.Mutex.Lock()
-				logger := dep.(*Session).Logger().WithKeyValue("msg_id", message.MsgId())
-				message.UpdateContext(func(ctx context.Context) context.Context {
-					return art.CtxWithLogger(ctx, dep, logger)
-				})
-				message.Mutex.Unlock()
-				return nil
-			}).PreMiddleware(),
+			art.UseLogger(true, art.SafeConcurrency_Copy),
+			art.UsePrintResult{}.PrintEgress().IgnoreErrors(sse.ErrBroadcastNotMatch).PostMiddleware(),
 			art.UseRecover(),
 			art.UsePrintDetail().PostMiddleware(),
 		)
@@ -73,21 +63,21 @@ func Broadcast(message *art.Message, sess *Session) error {
 
 func Notification(message *art.Message, sess *Session) error {
 	if !message.Metadata.Get("user_ids").(map[string]bool)[sess.UserId] {
-		return art.ErrNotFound
+		return sse.ErrBroadcastNotMatch
 	}
 	return sess.RawSend(message)
 }
 
 func PausedGame(message *art.Message, sess *Session) error {
 	if sess.GameId != message.Metadata.Str("game_id") {
-		return art.ErrNotFound
+		return sse.ErrBroadcastNotMatch
 	}
 	return sess.RawSend(message)
 }
 
 func ChangedRoomMap(message *art.Message, sess *Session) error {
 	if sess.RoomId != message.Metadata.Int("room_id") {
-		return art.ErrNotFound
+		return sse.ErrBroadcastNotMatch
 	}
 	return sess.RawSend(message)
 }

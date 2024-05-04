@@ -1,6 +1,7 @@
 package sse
 
 import (
+	"errors"
 	"net/http"
 	"sync"
 
@@ -17,6 +18,12 @@ type Server interface {
 	DisconnectClient(filter func(producer Producer) (found bool))
 	Shutdown()
 }
+
+const (
+	Metadata_Retry = "retry"
+)
+
+var ErrBroadcastNotMatch = errors.New("broadcast not match")
 
 //
 
@@ -110,12 +117,25 @@ func (f *Artisan) CreateProducer(c *gin.Context) (producer Producer, err error) 
 	// send ping, wait pong
 	waitPong := art.NewWaitPingPong()
 	sendPing := func(adp art.IAdapter) error {
+		mu.Lock()
+		defer mu.Unlock()
 		defer waitPong.Ack()
-		return adp.(Producer).RawSend(f.PingMessage)
+
+		select {
+		case <-disconnect:
+			return art.ErrClosed
+		default:
+			c.Render(-1, sse.Event{
+				Event: f.PingMessage.Subject,
+				Data:  f.PingMessage.Body,
+			})
+			c.Writer.Flush()
+		}
+		return nil
 	}
 	opt.SendPing(f.SendPingSeconds, waitPong, sendPing)
 
-	opt.AdapterSend(func(logger art.Logger, message *art.Message) (err error) {
+	opt.RawSend(func(logger art.Logger, message *art.Message) (err error) {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -123,9 +143,14 @@ func (f *Artisan) CreateProducer(c *gin.Context) (producer Producer, err error) 
 		case <-disconnect:
 			return art.ErrClosed
 		default:
+			// https://github.com/gin-contrib/sse?tab=readme-ov-file#sample-code
+			// https://github.com/gin-gonic/examples/blob/master/server-sent-event/main.go#L65-L72
+			// https://github.com/gin-gonic/gin/blob/v1.9.1/context.go#L1073
+			// https://github.com/gin-gonic/gin/blob/v1.9.1/context.go#L1082
 			c.Render(-1, sse.Event{
 				Event: message.Subject,
 				Id:    message.MsgId(),
+				Retry: message.Metadata.Uint(Metadata_Retry),
 				Data:  message.Body,
 			})
 			c.Writer.Flush()
@@ -133,7 +158,7 @@ func (f *Artisan) CreateProducer(c *gin.Context) (producer Producer, err error) 
 		return nil
 	})
 
-	opt.AdapterStop(func(logger art.Logger) (err error) {
+	opt.RawStop(func(logger art.Logger) (err error) {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -141,10 +166,9 @@ func (f *Artisan) CreateProducer(c *gin.Context) (producer Producer, err error) 
 		case <-disconnect:
 			return art.ErrClosed
 		default:
-			message := f.StopMessage
 			c.Render(-1, sse.Event{
-				Event: message.Subject,
-				Data:  message.Body,
+				Event: f.StopMessage.Subject,
+				Data:  f.StopMessage.Body,
 			})
 			c.Writer.Flush()
 		}
