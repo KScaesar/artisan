@@ -65,14 +65,14 @@ func NewMux() *sse.EgressMux {
 			art.UsePrintDetail().PostMiddleware(),
 		)
 
-	mux.DefaultHandler(art.UseGenericFunc(Broadcast))
+	mux.DefaultHandler(UseSession(Broadcast))
 
 	v0 := mux.Group("v0/")
-	v0.Handler("Notification", art.UseGenericFunc(Notification))
+	v0.Handler("Notification", UseSession(Notification))
 
 	v1 := mux.Group("v1/")
-	v1.Handler("PausedGame", art.UseGenericFunc(PausedGame))
-	v1.Handler("ChangedRoomMap", art.UseGenericFunc(ChangedRoomMap))
+	v1.Handler("PausedGame", UseSession(PausedGame))
+	v1.Handler("ChangedRoomMap", UseSession(ChangedRoomMap))
 
 	return mux
 }
@@ -100,6 +100,13 @@ func NewHttpServer(sseServer sse.Server, shutdown *art.Shutdown) *http.Server {
 }
 
 // handler
+
+func UseSession(handler func(*art.Message, *Session) error) art.HandleFunc {
+	return func(message *art.Message, dependency any) error {
+		dep := dependency.(*Session)
+		return handler(message, dep)
+	}
+}
 
 func Transform(message *art.Message, dep any) error {
 	if !message.Metadata.Has("version") {

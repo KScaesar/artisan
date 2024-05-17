@@ -3,7 +3,7 @@ module github.com/KScaesar/artisan/sse
 go 1.18
 
 require (
-	github.com/KScaesar/art v0.50.0
+	github.com/KScaesar/art v0.51.0
 	github.com/gin-contrib/sse v0.1.0
 	github.com/gin-gonic/gin v1.9.1
 )
@@ -33,7 +33,7 @@ require (
 	golang.org/x/crypto v0.22.0 // indirect
 	golang.org/x/net v0.24.0 // indirect
 	golang.org/x/sys v0.19.0 // indirect
-	golang.org/x/text v0.14.0 // indirect
+	golang.org/x/text v0.15.0 // indirect
 	google.golang.org/protobuf v1.33.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

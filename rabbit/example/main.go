@@ -120,7 +120,7 @@ func NewIngressMux() *rabbit.IngressMux {
 			art.UseRecover(),
 			art.UseLogger(true, art.SafeConcurrency_Skip),
 			art.UseAdHocFunc(func(message *art.Message, dep any) error {
-				logger := art.CtxGetLogger(message.Ctx, dep)
+				logger := art.CtxGetLogger(message.Ctx)
 				logger.Info("recv %q", message.Subject)
 				return nil
 			}).PreMiddleware(),
